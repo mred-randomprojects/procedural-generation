@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Procedural Worlds — Noise &amp; Wave Function Collapse</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="js/noise.js" defer></script>
+  <script src="js/world.js" defer></script>
+  <script src="js/render.js" defer></script>
+  <script src="js/wfc.js" defer></script>
+  <script src="js/main.js" defer></script>
+</head>
+<body>
+  <aside id="sidebar">
+    <header>
+      <h1>Procedural Worlds</h1>
+      <p class="subtitle">Layered-noise terrain (the Minecraft way) and wave function collapse, live in your browser. Every slider is a real input to the generator.</p>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="world">🌍 Noise World</button>
+      <button class="tab" data-tab="wfc">🧩 WFC</button>
+    </nav>
+    <a class="skylink" href="3d.html">🎈 Skylands — isometric 3D + missiles →</a>
+    <a class="skylink" href="voxel.html">🧱 New: Voxel Worlds — Minecraft-style biomes →</a>
+
+    <section id="panel-world">
+      <div class="row seed-row">
+        <input id="seed" type="text" value="gaia" spellcheck="false" aria-label="World seed" />
+        <button id="dice" title="Random seed">🎲</button>
+      </div>
+
+      <div class="row view-row">
+        <button class="view active" data-view="biome">Biomes</button>
+        <button class="view" data-view="elev">Height</button>
+        <button class="view" data-view="moist">Moisture</button>
+        <button class="view" data-view="temp">Heat</button>
+      </div>
+
+      <label>Terrain scale <span class="val"></span>
+        <input id="p-scale" type="range" min="1" max="6" step="0.1" value="2.2" /></label>
+      <label>Detail (octaves) <span class="val"></span>
+        <input id="p-octaves" type="range" min="1" max="8" step="1" value="5" /></label>
+      <label>Roughness <span class="val"></span>
+        <input id="p-rough" type="range" min="0.35" max="0.68" step="0.01" value="0.5" /></label>
+      <label>Island shape <span class="val"></span>
+        <input id="p-island" type="range" min="0" max="1" step="0.05" value="0.3" /></label>
+      <label>Sea level <span class="val"></span>
+        <input id="p-sea" type="range" min="0.2" max="0.7" step="0.01" value="0.46" /></label>
+      <label>Mountain line <span class="val"></span>
+        <input id="p-mtn" type="range" min="0.55" max="0.95" step="0.01" value="0.75" /></label>
+      <label>Moisture <span class="val"></span>
+        <input id="p-moist" type="range" min="-0.4" max="0.4" step="0.02" value="0" /></label>
+      <label>Temperature <span class="val"></span>
+        <input id="p-temp" type="range" min="-0.4" max="0.4" step="0.02" value="0" /></label>
+      <label>Rivers <span class="val"></span>
+        <input id="p-rivers" type="range" min="0" max="40" step="1" value="14" /></label>
+      <label>Towns <span class="val"></span>
+        <input id="p-towns" type="range" min="0" max="14" step="1" value="6" /></label>
+
+      <details>
+        <summary>How this world is made</summary>
+        <ul>
+          <li><b>Three noise fields.</b> Elevation, moisture and temperature are independent layers of smooth random (simplex) noise — the same trick Minecraft uses. Flip to the Height / Moisture / Heat views to see the raw layers.</li>
+          <li><b>Thresholds.</b> The sea &amp; mountain sliders are simple cut-offs on elevation. Everything in between is classified by (temperature, moisture) into a biome — a Whittaker diagram lookup.</li>
+          <li><b>Rivers</b> start on high ground and flow downhill until they reach the sea (or pond up). They moisten nearby land, so valleys turn green.</li>
+          <li><b>Towns</b> are placed by scoring cells (flat, near water, mild climate) and keeping the best ones that are far apart. <b>Roads</b> are A* paths that avoid steep slopes and pay a toll to bridge rivers.</li>
+        </ul>
+      </details>
+
+      <h3>Legend</h3>
+      <div id="legend"></div>
+    </section>
+
+    <section id="panel-wfc" hidden>
+      <label>Speed (collapses / frame) <span class="val"></span>
+        <input id="wfc-speed" type="range" min="1" max="80" step="1" value="14" /></label>
+
+      <h3>Tile weights</h3>
+      <label>Water <span class="val"></span>
+        <input id="w-water" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
+      <label>Sand <span class="val"></span>
+        <input id="w-sand" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
+      <label>Grass <span class="val"></span>
+        <input id="w-grass" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
+      <label>Forest <span class="val"></span>
+        <input id="w-forest" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
+      <label>Mountains <span class="val"></span>
+        <input id="w-mountain" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
+
+      <div class="row"><button id="wfc-restart" class="primary">↻ Restart collapse</button></div>
+
+      <h3>Paint</h3>
+      <p class="hint">Pick a tile, then click / drag on the map to force it — constraints ripple outward. If a tile is impossible somewhere, the area melts back into superposition and re-collapses ("heals") around your choice.</p>
+      <div id="palette"></div>
+
+      <details>
+        <summary>How wave function collapse works</summary>
+        <ul>
+          <li>Every cell starts as a <b>superposition</b> of all 8 tiles (dim = uncertain).</li>
+          <li>Each step, the algorithm picks the cell with the <b>lowest entropy</b> (fewest / most lopsided options left) and <b>collapses</b> it to a single tile, chosen randomly using the weights above.</li>
+          <li>Constraints then <b>propagate</b>: a tile may only touch itself or its immediate neighbours in the chain deep&nbsp;→&nbsp;water&nbsp;→&nbsp;sand&nbsp;→&nbsp;grass&nbsp;→&nbsp;forest&nbsp;→&nbsp;hills&nbsp;→&nbsp;mountain&nbsp;→&nbsp;snow. Impossible options get deleted, which can cascade far across the map.</li>
+          <li>Paint a tile to force a choice and watch the ripple. Painting something the constraints forbid (snow in a lake, say) melts the neighbourhood back into uncertainty, and it heals around your choice.</li>
+        </ul>
+      </details>
+    </section>
+  </aside>
+
+  <main>
+    <canvas id="world-canvas" width="960" height="600"></canvas>
+    <canvas id="wfc-canvas" width="960" height="600" hidden></canvas>
+    <div id="status"></div>
+  </main>
+</body>
+</html>

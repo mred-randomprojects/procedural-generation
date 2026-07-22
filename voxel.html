@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voxel Worlds — Isometric Block Terrain</title>
+  <link rel="stylesheet" href="voxel.css" />
+  <script src="js/noise.js" defer></script>
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+  <script src="js/voxel-gen.js" type="module" defer></script>
+</head>
+<body>
+  <div id="voxel-root"></div>
+
+  <div id="hud-score" class="hud-panel">
+    <div class="hud-score-row">
+      <span class="hud-label">🧟 Zombies killed</span>
+      <span id="vx-score-val">0</span>
+    </div>
+    <div class="hud-score-row">
+      <span class="hud-label">💰 Money</span>
+      <span id="vx-money-val">$0</span>
+    </div>
+  </div>
+
+  <div id="hud-top" class="hud-panel">
+    <h1>Voxel Worlds</h1>
+    <div class="hud-row">
+      <input id="vx-seed" value="terra" spellcheck="false" aria-label="World seed" />
+      <button id="vx-new" title="New random world">↻</button>
+    </div>
+    <div class="hud-row">
+      <select id="vx-biome" aria-label="Biome preset">
+        <option value="plains">Plains</option>
+        <option value="desert">Desert</option>
+        <option value="snowy">Snowy Tundra</option>
+        <option value="islands">Islands</option>
+        <option value="mountains">Mountains</option>
+        <option value="swamp">Swamp</option>
+      </select>
+    </div>
+    <div class="hud-row">
+      <span class="hud-label">Blast radius</span>
+      <button id="vx-radius-down" title="Smaller blast radius">−</button>
+      <span id="vx-radius-val">3</span>
+      <button id="vx-radius-up" title="Bigger blast radius">+</button>
+    </div>
+    <a class="hud-link" href="index.html">← 2D worlds</a>
+    <a class="hud-link" href="3d.html">isometric skylands →</a>
+  </div>
+
+  <div id="hud-hint" class="hud-panel">
+    Drag — rotate &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
+    Click — fire missile &nbsp;·&nbsp; +/− — blast radius &nbsp;·&nbsp; R — regenerate
+  </div>
+</body>
+</html>
