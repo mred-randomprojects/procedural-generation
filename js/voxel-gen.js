@@ -119,7 +119,23 @@ let highlightGeo, highlightOuterMat, highlightCoreMat, hoverClientX = null, hove
 // same projectiles they use on each other; when its HP reaches 0 the run
 // ends. `stackLevel: 1` makes it a valid projectile target with zero armor
 // (defenseFor(1) === 0) — every zombie can always hurt the Heart.
-const HEART_MAX_HP = 100;
+/* ---------- Legacy: permanent cross-run progression ---------- */
+// Shards are earned every run (scaled by score) and spent on permanent
+// perks from the game-over screen. This is the "one more run" hook: every
+// defeat still banks progress toward stronger future runs.
+let legacy = { shards: 0, heartRank: 0, energyRank: 0, blastRank: 0 };
+function loadLegacy() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("vx-legacy") || "{}");
+    for (const k of Object.keys(legacy)) if (typeof saved[k] === "number") legacy[k] = saved[k];
+  } catch { /* fresh legacy */ }
+}
+function saveLegacy() {
+  try { localStorage.setItem("vx-legacy", JSON.stringify(legacy)); } catch { /* private mode */ }
+}
+function legacyCost(rank) { return 3 + rank * 2; } // shards; grows per rank
+function heartMaxHp() { return 100 + legacy.heartRank * 20; }
+loadLegacy();
 let heart = null; // { isHeart, x, z, y, visualY, stackLevel, hp, group, crystal, glow, light }
 let gameState = "playing"; // "playing" | "paused" | "over"
 let waveNumber = 0, waveTimer = 18, trickleTimer = 5;
@@ -179,7 +195,7 @@ function findHeartSpot() {
 // center: a slowly spinning octahedron with a glow sprite and its own light.
 // keepHp preserves damage across a keep-zombies terrain regen.
 function buildHeart(keepHp = false) {
-  const prevHp = keepHp && heart ? heart.hp : HEART_MAX_HP;
+  const prevHp = keepHp && heart ? heart.hp : heartMaxHp();
   if (heart) root.remove(heart.group);
   const { x, z } = findHeartSpot();
   const y = heightAt(x, z) + 1;
@@ -227,7 +243,7 @@ function updateHeart(now) {
   heart.visualY = y + 0.3;
   heart.group.position.y = y;
   heart.crystal.rotation.y = now * 0.8;
-  const frac = Math.max(0, heart.hp) / HEART_MAX_HP;
+  const frac = Math.max(0, heart.hp) / heartMaxHp();
   const urgency = 1 + (1 - frac) * 3;
   heart.crystal.position.y = 1.1 + Math.sin(now * 1.6 * urgency) * 0.12;
   heart.glow.material.opacity = 0.4 + 0.2 * Math.sin(now * 2 * urgency) + (1 - frac) * 0.15;
@@ -238,7 +254,7 @@ function updateHeartHud() {
   const waveEl = document.getElementById("vx-wave-val");
   if (waveEl) waveEl.textContent = waveNumber === 0 ? "Calm before the storm" : `Wave ${waveNumber}`;
   if (!fill) return;
-  const frac = Math.max(0, heart ? heart.hp : 0) / HEART_MAX_HP;
+  const frac = Math.max(0, heart ? heart.hp : 0) / heartMaxHp();
   fill.style.width = `${frac * 100}%`;
   fill.classList.toggle("hurt", frac <= 0.6 && frac > 0.3);
   fill.classList.toggle("critical", frac <= 0.3);
@@ -349,7 +365,7 @@ function spawnMonsters(biome, heights, seed) {
   }
   killCount = 0;
   xp = 0;
-  maxUnlockedBlast = STARTING_MAX_BLAST;
+  maxUnlockedBlast = STARTING_MAX_BLAST + legacy.blastRank; // Demolitionist legacy perk
   updateScoreHud();
   updateZombieBoard();
 }
@@ -465,16 +481,58 @@ function endRun() {
     shake = 4.5;
   }
 
+  // Bank Legacy shards — every defeat still buys future power.
+  const shardsEarned = Math.max(1, Math.floor(score / 50));
+  legacy.shards += shardsEarned;
+  saveLegacy();
+
   const stats = document.getElementById("vx-go-stats");
   if (stats) {
     const mins = Math.floor(survived / 60), secs = Math.round(survived % 60);
     stats.innerHTML =
       `Survived <b>${mins}m ${secs}s</b> across <b>${waveNumber}</b> waves<br>` +
       `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b><br>` +
-      `Score: <b>${score}</b> · <span class="go-best">Best: ${best}</span>`;
+      `Score: <b>${score}</b> · <span class="go-best">Best: ${best}</span><br>` +
+      `🔮 Shards earned: <b>+${shardsEarned}</b>`;
   }
+  renderLegacyShop();
   document.getElementById("vx-gameover")?.classList.add("show");
   updateHeartHud();
+}
+
+// The permanent-upgrade storefront on the defeat screen. Perks apply from
+// the NEXT run on; buying re-renders in place so shards can be chain-spent.
+const LEGACY_PERKS = [
+  { key: "heartRank", icon: "💪", name: "Reinforced Heart", desc: "+20 max Heart HP" },
+  { key: "energyRank", icon: "⚡", name: "Head Start", desc: "+40 starting energy" },
+  { key: "blastRank", icon: "💥", name: "Demolitionist", desc: "+1 starting blast radius" },
+];
+
+function renderLegacyShop() {
+  const el = document.getElementById("vx-legacy-shop");
+  if (!el) return;
+  const rows = LEGACY_PERKS.map((p, i) => {
+    const rank = legacy[p.key];
+    const cost = legacyCost(rank);
+    const afford = legacy.shards >= cost;
+    return `<div class="legacy-row">
+      <span class="legacy-name">${p.icon} ${p.name} <em>Lv ${rank}</em><br><small>${p.desc}</small></span>
+      <button class="legacy-buy" data-perk="${i}" ${afford ? "" : "disabled"}>${cost} 🔮</button>
+    </div>`;
+  }).join("");
+  el.innerHTML = `<div class="legacy-title">🔮 Legacy — ${legacy.shards} shards</div>${rows}`;
+  for (const btn of el.querySelectorAll(".legacy-buy")) {
+    btn.addEventListener("click", () => {
+      const perk = LEGACY_PERKS[Number(btn.dataset.perk)];
+      const cost = legacyCost(legacy[perk.key]);
+      if (legacy.shards < cost) return;
+      legacy.shards -= cost;
+      legacy[perk.key]++;
+      saveLegacy();
+      playPurchase();
+      renderLegacyShop();
+    });
+  }
 }
 
 // Fresh run on the CURRENT world: new Heart at full HP, wave clock reset.
@@ -488,7 +546,7 @@ function resetRun() {
   runStartTime = performance.now() / 1000;
   buildHeart(false);
   clearTurrets();
-  energy = 0;
+  energy = legacy.energyRank * 40; // Head Start legacy perk
   repairCost = 50;
   turretCost = 120;
   document.getElementById("vx-gameover")?.classList.remove("show");
@@ -508,15 +566,15 @@ function updateShopHud() {
   const turretCostEl = document.getElementById("vx-turret-cost");
   if (repairCostEl) repairCostEl.textContent = `${repairCost}⚡`;
   if (turretCostEl) turretCostEl.textContent = `${turretCost}⚡`;
-  if (repairBtn) repairBtn.disabled = gameState !== "playing" || energy < repairCost || !heart || heart.hp >= HEART_MAX_HP;
+  if (repairBtn) repairBtn.disabled = gameState !== "playing" || energy < repairCost || !heart || heart.hp >= heartMaxHp();
   if (turretBtn) turretBtn.disabled = gameState !== "playing" || energy < turretCost;
 }
 
 function buyRepair() {
-  if (gameState !== "playing" || energy < repairCost || !heart || heart.hp >= HEART_MAX_HP) return;
+  if (gameState !== "playing" || energy < repairCost || !heart || heart.hp >= heartMaxHp()) return;
   energy -= repairCost;
   repairCost = Math.round(repairCost * 1.5);
-  heart.hp = Math.min(HEART_MAX_HP, heart.hp + 30);
+  heart.hp = Math.min(heartMaxHp(), heart.hp + 30);
   playPurchase();
   spawnEatFx(heart.x, heart.y + 1.2, heart.z); // reuse the flash/ring as a "heal burst"
   updateHeartHud();
