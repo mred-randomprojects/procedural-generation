@@ -53,7 +53,9 @@ const GRID = 44;
 // Rendered layers below the surface. Digging has no floor — craters carve
 // indefinitely deeper instead of healing — so this is the constant buffer of
 // diggable rock always visible below whatever the deepest point currently is.
-const DEPTH_LAYERS = 9;
+// Spare buffer of solid rock kept below the single deepest dug point on the
+// whole map (not per-column) — see rebuildBlockMeshes.
+const DEPTH_SPARE = 5;
 
 const MONSTER_COUNT = 9;
 const MERGE_DIST = 0.85;
@@ -621,17 +623,28 @@ function clearGroup(group) {
 
 // Rebuilds the terrain InstancedMeshes from currentHeights/scorched. Called on
 // world generation and again after every explosion edits the terrain.
+//
+// Every column fills all the way down to the SAME global floor — the single
+// lowest point anywhere on the map, minus a spare buffer — not just some
+// fixed depth below its own top. A per-column relative depth left visible
+// gaps (rendered as blank sky through the terrain) between a tall column and
+// a neighboring freshly-dug deep one, since their filled ranges never
+// overlapped; a shared floor guarantees they always do.
 function rebuildBlockMeshes() {
   const biome = currentBiome;
   const heights = currentHeights;
   const { materials, variantCounts } = activeMaterials;
+
+  let minHeight = Infinity;
+  for (let i = 0; i < heights.length; i++) if (heights[i] < minHeight) minHeight = heights[i];
+  const globalBottom = minHeight - DEPTH_SPARE;
 
   const buckets = new Map();
   for (let z = 0; z < GRID; z++) {
     for (let x = 0; x < GRID; x++) {
       const idx = z * GRID + x;
       const height = heights[idx];
-      const bottom = height - DEPTH_LAYERS + 1; // no floor clamp — always DEPTH_LAYERS of rock below, however deep
+      const bottom = globalBottom; // same for every column — see comment above
       for (let y = height; y >= bottom; y--) {
         let type = layerType(biome, y, height);
         if (y === height && scorched[idx]) type = "charred";
