@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1117" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Voxel Worlds — Isometric Block Terrain</title>
   <link rel="stylesheet" href="voxel.css" />
   <script src="js/noise.js" defer></script>
@@ -36,7 +40,7 @@
       <h1 class="title-logo">💎 HEARTFALL</h1>
       <p class="title-tag">Hold the Heart against the evolving horde.</p>
       <p class="title-how">
-        Click to fire missiles · Zombies eat each other and <b>evolve</b> ·
+        <span class="only-fine">Click</span><span class="only-coarse">Tap</span> to fire missiles · Zombies eat each other and <b>evolve</b> ·
         Spend ⚡ on repairs &amp; turrets · Survive the waves
       </p>
       <div class="title-diff">
@@ -56,7 +60,14 @@
   <div id="vx-vignette"></div>
 
   <div id="vx-paused">
-    <div class="paused-panel">⏸ Paused — press P to resume</div>
+    <div class="paused-panel">
+      <div class="paused-title">⏸ Paused</div>
+      <div class="paused-actions">
+        <button id="vx-resume-btn">▶ Resume</button>
+        <button id="vx-pause-newrun">↻ New run</button>
+      </div>
+      <div class="paused-hint only-fine">P — resume &nbsp;·&nbsp; R — new run</div>
+    </div>
   </div>
 
   <div id="hud-shop" class="hud-panel">
@@ -186,9 +197,17 @@
   </div>
 
   <div id="hud-hint" class="hud-panel">
-    Drag — rotate &nbsp;·&nbsp; ⌘/⌥ + drag — pan &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
-    Click — fire missile &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
+    <span class="only-fine">
+      Drag — rotate &nbsp;·&nbsp; ⌘/⌥ + drag — pan &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
+      Click — fire missile &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
+    </span>
+    <span class="only-coarse">
+      Tap — fire (hold to aim) · Drag — rotate · 2 fingers — pan · Pinch — zoom
+    </span>
   </div>
+
+  <button id="vx-menu-btn" class="hud-fab" title="World &amp; tweaks" aria-label="Toggle world settings">⚙️</button>
+  <button id="vx-pause-btn" class="hud-fab" title="Pause" aria-label="Pause">⏸</button>
 
   <div id="vx-toast"></div>
 

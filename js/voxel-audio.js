@@ -28,6 +28,15 @@ export function setMasterVolume(v) {
   if (masterBus) masterBus.gain.value = masterVolume;
 }
 
+// Create/resume the context from inside a user-gesture handler — mobile
+// Safari/Chrome only allow audio to start within a gesture, and sounds here
+// are usually triggered later from the rAF loop (missile lands ~0.8s after
+// the tap), which does NOT count as one. Call this from any pointerdown;
+// repeat calls are free and double as recovery after iOS audio interruptions.
+export function unlockAudio() {
+  getCtx();
+}
+
 function noiseBuffer(c, duration) {
   const n = Math.max(1, Math.floor(c.sampleRate * duration));
   const buf = c.createBuffer(1, n, c.sampleRate);

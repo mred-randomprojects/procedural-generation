@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { buildBlockMaterials, disposeBlockMaterials, buildZombieMaterials, disposeZombieMaterials } from "./voxel-textures.js";
 import {
   playExplosion, playZombieKill, playHeartHit, playWaveStart,
-  playGameOver, playPurchase, playTurretShot, setMasterVolume,
+  playGameOver, playPurchase, playTurretShot, setMasterVolume, unlockAudio,
 } from "./voxel-audio.js";
 
 /* ---------- Biome presets ---------- */
@@ -2206,33 +2206,116 @@ function init() {
   window.addEventListener("resize", onResize);
 
   const canvas = renderer.domElement;
-  canvas.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    dragging = true;
-    panDragging = e.metaKey || e.altKey; // Cmd/Option+drag pans instead of orbiting
-    lastX = e.clientX; lastY = e.clientY;
-    clickStartX = e.clientX; clickStartY = e.clientY; clickStartT = performance.now();
+
+  // Unified mouse + touch input via Pointer Events.
+  // Mouse: hover aims, left-drag orbits, Cmd/⌥+drag pans, quick click fires.
+  // Touch: a held finger shows the blast footprint and firing happens on
+  // release-in-place (no time limit — deliberate aiming is allowed), a
+  // one-finger drag orbits, two fingers pan the map and pinch to zoom.
+  const activePointers = new Map(); // pointerId -> {x, y}
+  let primaryPointerId = null;
+  let touchAiming = false; // held touch that hasn't turned into a drag yet
+  let multiTouched = false; // once true, this gesture can never fire on release
+  let pinchStartDist = 0, pinchStartZoom = 1, lastMidX = 0, lastMidY = 0;
+  const dragSlop = (type) => (type === "mouse" ? 6 : 11); // fingers wobble more than mice
+  // The phone layout hides the settings panel behind a drawer (see voxel.css);
+  // while it's open, a tap on the world closes it instead of firing.
+  const phoneLayout = window.matchMedia("(max-width: 760px), (max-height: 520px)");
+
+  function panCamera(dxPix, dyPix) {
+    // Free pan — no bounds. Digging has no floor, so the camera can't have
+    // one either: clamping the target made deep pits and the map's
+    // underside literally unviewable.
+    const scale = 0.045 / zoomLevel;
+    const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
+    const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
+    target.addScaledVector(right, -dxPix * scale);
+    target.addScaledVector(fwd, -dyPix * scale);
+  }
+
+  // (Re-)anchor the two-finger gesture: called when a second finger lands
+  // AND when a third lifts, so the surviving pair never causes a zoom jump.
+  function beginPinch() {
+    const pts = [...activePointers.values()];
+    pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+    pinchStartZoom = zoomLevel;
+    lastMidX = (pts[0].x + pts[1].x) / 2;
+    lastMidY = (pts[0].y + pts[1].y) / 2;
+  }
+
+  function updatePinch() {
+    const pts = [...activePointers.values()];
+    const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    const midX = (pts[0].x + pts[1].x) / 2, midY = (pts[0].y + pts[1].y) / 2;
+    // Same practically-unbounded zoom range as the wheel handler below.
+    zoomLevel = Math.min(40, Math.max(0.05, pinchStartZoom * (d / pinchStartDist)));
+    onResize();
+    panCamera(midX - lastMidX, midY - lastMidY); // two-finger drag pans too
+    lastMidX = midX; lastMidY = midY;
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (e.pointerType !== "mouse") e.preventDefault(); // no compat mouse events
+    // Tapping the world should dismiss the seed input's keyboard on phones.
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur?.();
+    }
+    canvas.setPointerCapture(e.pointerId);
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size === 1) {
+      primaryPointerId = e.pointerId;
+      multiTouched = false;
+      dragging = true;
+      panDragging = e.metaKey || e.altKey; // Cmd/Option+drag pans instead of orbiting
+      lastX = e.clientX; lastY = e.clientY;
+      clickStartX = e.clientX; clickStartY = e.clientY; clickStartT = performance.now();
+      if (e.pointerType !== "mouse") {
+        // Touch has no hover — show the blast footprint under the held finger.
+        touchAiming = true;
+        hoverClientX = e.clientX; hoverClientY = e.clientY;
+        updateAimIndicator();
+      }
+    } else {
+      // Second finger down: the gesture is now pan/zoom — never a shot.
+      multiTouched = true;
+      dragging = false;
+      clickStartX = null;
+      touchAiming = false;
+      hoverClientX = null; hoverClientY = null;
+      hideAllHighlights();
+      if (activePointers.size === 2) beginPinch();
+    }
   });
-  window.addEventListener("mouseup", (e) => {
-    dragging = false;
-    if (clickStartX === null) return;
-    const moved = Math.hypot(e.clientX - clickStartX, e.clientY - clickStartY);
-    const elapsed = performance.now() - clickStartT;
-    if (moved < 6 && elapsed < 400) queueClick(e.clientX, e.clientY);
-    clickStartX = null;
-  });
-  window.addEventListener("mousemove", (e) => {
-    if (dragging) {
+
+  canvas.addEventListener("pointermove", (e) => {
+    const p = activePointers.get(e.pointerId);
+    if (p) { p.x = e.clientX; p.y = e.clientY; }
+
+    if (activePointers.size >= 2) {
+      if (p) updatePinch();
+      return;
+    }
+
+    if (p && e.pointerId === primaryPointerId) {
       const dxPix = e.clientX - lastX, dyPix = e.clientY - lastY;
+      const moved = clickStartX !== null &&
+        Math.hypot(e.clientX - clickStartX, e.clientY - clickStartY) > dragSlop(e.pointerType);
+      if (touchAiming && !moved) {
+        // Finger still held in place: keep aiming, don't orbit yet.
+        hoverClientX = e.clientX; hoverClientY = e.clientY;
+        lastX = e.clientX; lastY = e.clientY;
+        updateAimIndicator();
+        return;
+      }
+      if (touchAiming && moved) {
+        // It's a drag after all — drop the aim preview and start orbiting.
+        touchAiming = false;
+        hoverClientX = null; hoverClientY = null;
+        hideAllHighlights();
+      }
       if (panDragging) {
-        // Free pan — no bounds. Digging has no floor, so the camera can't
-        // have one either: clamping the target made deep pits and the map's
-        // underside literally unviewable.
-        const scale = 0.045 / zoomLevel;
-        const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
-        const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
-        target.addScaledVector(right, -dxPix * scale);
-        target.addScaledVector(fwd, -dyPix * scale);
+        panCamera(dxPix, dyPix);
       } else {
         theta -= dxPix * 0.006;
         // Near-full vertical orbit: from almost level with the horizon (you
@@ -2243,13 +2326,65 @@ function init() {
       }
       lastX = e.clientX; lastY = e.clientY;
     }
-    hoverClientX = e.clientX; hoverClientY = e.clientY;
-    updateAimIndicator();
+
+    if (e.pointerType === "mouse") {
+      hoverClientX = e.clientX; hoverClientY = e.clientY;
+      updateAimIndicator();
+    }
   });
-  canvas.addEventListener("mouseleave", () => {
-    hoverClientX = null; hoverClientY = null;
-    hideAllHighlights();
+
+  function releasePointer(e, allowClick) {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.delete(e.pointerId);
+    if (e.pointerId === primaryPointerId) {
+      primaryPointerId = null;
+      dragging = false;
+      if (allowClick && clickStartX !== null && !multiTouched) {
+        const movedDist = Math.hypot(e.clientX - clickStartX, e.clientY - clickStartY);
+        const elapsed = performance.now() - clickStartT;
+        // Mouse keeps the quick-click time limit; touch deliberately has
+        // none — press-and-hold to aim, release to fire.
+        if (movedDist < dragSlop(e.pointerType) && (e.pointerType !== "mouse" || elapsed < 400)) {
+          if (phoneLayout.matches && document.body.classList.contains("hud-open")) {
+            document.body.classList.remove("hud-open"); // tap on the world closes the drawer
+          } else {
+            queueClick(e.clientX, e.clientY);
+          }
+        }
+      }
+      clickStartX = null;
+    }
+    if (e.pointerType !== "mouse") {
+      touchAiming = false;
+      hoverClientX = null; hoverClientY = null;
+      hideAllHighlights();
+    }
+    if (activePointers.size === 2) {
+      beginPinch(); // a third finger lifted — re-anchor the remaining pair
+    } else if (activePointers.size === 1) {
+      // Pinch ended with one finger still down: it continues as an orbit drag.
+      const [id, p] = activePointers.entries().next().value;
+      primaryPointerId = id;
+      dragging = true;
+      panDragging = false;
+      lastX = p.x; lastY = p.y;
+      clickStartX = null; // a leftover pinch finger is never a tap
+    } else if (activePointers.size === 0) {
+      multiTouched = false;
+      pinchStartDist = 0;
+    }
+  }
+  canvas.addEventListener("pointerup", (e) => releasePointer(e, true));
+  canvas.addEventListener("pointercancel", (e) => releasePointer(e, false));
+  canvas.addEventListener("pointerleave", (e) => {
+    // Mouse hover left the canvas (drags hold pointer capture, so this is
+    // hover-only): drop the aim indicator.
+    if (e.pointerType === "mouse" && !activePointers.has(e.pointerId)) {
+      hoverClientX = null; hoverClientY = null;
+      hideAllHighlights();
+    }
   });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault()); // long-press menu on touch
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const factor = Math.exp(-e.deltaY * 0.0015);
@@ -2260,6 +2395,9 @@ function init() {
   }, { passive: false });
 
   window.addEventListener("keydown", (e) => {
+    // Typing in the seed box (or any control) must never pan/regenerate/pause.
+    const t = e.target;
+    if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
     keys[e.key.toLowerCase()] = true;
     if (e.key.toLowerCase() === "r") regenerate(true);
     if (e.key.toLowerCase() === "p") togglePause();
@@ -2330,6 +2468,20 @@ function init() {
   document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
   document.getElementById("vx-shop-mine").addEventListener("click", buyMine);
   document.getElementById("vx-shop-slow").addEventListener("click", buySlow);
+
+  // Mobile chrome: settings-drawer toggle, pause button, pause-overlay
+  // actions (phones have no P/R keys). All work with a mouse too.
+  document.getElementById("vx-menu-btn")?.addEventListener("click", () => {
+    document.body.classList.toggle("hud-open");
+  });
+  document.getElementById("vx-pause-btn")?.addEventListener("click", togglePause);
+  document.getElementById("vx-resume-btn")?.addEventListener("click", togglePause);
+  document.getElementById("vx-pause-newrun")?.addEventListener("click", () => regenerate(true));
+
+  // Mobile browsers only allow audio to start inside a user gesture — see
+  // unlockAudio. Every pointerdown re-checks, which also recovers the
+  // context after an iOS audio-session interruption.
+  window.addEventListener("pointerdown", unlockAudio);
 
   // Title screen: play, difficulty, settings — controls seeded from the
   // persisted settings so the menu reflects what's actually active.

@@ -158,8 +158,21 @@ html, body {
   border-radius: 12px;
   padding: 16px 28px;
   color: #9fe8ff;
-  font-size: 17px;
+  text-align: center;
 }
+.paused-title { font-size: 17px; margin-bottom: 12px; }
+.paused-actions { display: flex; gap: 10px; justify-content: center; }
+.paused-actions button {
+  background: #133247;
+  color: #9fe8ff;
+  border: 1px solid #2e6f96;
+  border-radius: 9px;
+  padding: 10px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.paused-actions button:hover { filter: brightness(1.25); }
+.paused-hint { margin-top: 10px; font-size: 12px; color: #7f93a5; }
 
 #hud-shop {
   bottom: 58px;
@@ -530,4 +543,211 @@ html, body {
 #vx-toast.show {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+/* ==================== touch & phone support ==================== */
+
+/* Global touch behavior: the canvas owns all gestures (tap/drag/pinch are
+   game input, never page scroll/zoom); HUD panels allow vertical scrolling
+   of their own content but no page pinch-zoom; buttons drop the double-tap
+   zoom delay. Rubber-band overscroll and long-press callouts are game-feel
+   killers on iOS, so they're off everywhere. */
+html, body {
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body { -webkit-tap-highlight-color: transparent; }
+#voxel-root canvas {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.hud-panel, #vx-title, #vx-gameover, #vx-paused, .hud-fab {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-y;
+}
+button { touch-action: manipulation; }
+/* Sliders need free horizontal drags even inside scrollable panels. */
+input[type="range"] { touch-action: none; }
+input, select { -webkit-user-select: text; user-select: text; }
+
+/* Pointer-type-dependent copy: keyboard/mouse hints vs touch hints. */
+.only-coarse { display: none; }
+@media (any-pointer: coarse) {
+  .only-fine { display: none; }
+  .only-coarse { display: inline; }
+}
+
+/* Floating round buttons (menu drawer + pause) for layouts with no
+   keyboard. Hidden by default; shown by the media queries below. */
+.hud-fab {
+  position: absolute;
+  display: none;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(13, 17, 23, 0.65);
+  border: 1px solid rgba(80, 100, 120, 0.5);
+  color: #e6ebf1;
+  font-size: 19px;
+  line-height: 1;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  cursor: pointer;
+  z-index: 46;
+}
+.hud-fab:hover { filter: brightness(1.2); }
+
+/* Touch devices that keep the desktop layout (tablets) still have no P
+   key — give them the pause button, tucked above the version badge. */
+@media (any-pointer: coarse) {
+  #vx-pause-btn {
+    display: flex;
+    right: calc(14px + env(safe-area-inset-right));
+    bottom: calc(44px + env(safe-area-inset-bottom));
+  }
+}
+
+/* Overlay panels must never overflow a small screen, on any device. */
+.title-panel {
+  max-width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+}
+.go-panel {
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+}
+
+/* Bigger touch targets + no-iOS-zoom input font sizes on touch devices. */
+@media (any-pointer: coarse) {
+  #vx-seed, #vx-biome { font-size: 16px; }
+  #hud-shop button, .diff-btn, #vx-title-play, .legacy-buy, #vx-go-restart,
+  #vx-new, #vx-locate-elite, #vx-tweaks button, .paused-actions button {
+    min-height: 44px;
+  }
+  .hud-slider-inner input[type="range"],
+  .title-settings input[type="range"] { min-height: 34px; }
+  .title-settings { flex-wrap: wrap; }
+}
+
+/* ---------- the phone layout ---------- */
+/* Covers portrait phones (narrow) and landscape phones (short). The heart
+   bar becomes a full-width strip, the stats panel compacts under it on the
+   right, the settings panel + zombie board collapse behind the ⚙️ drawer
+   button, and the shop becomes a full-width touch grid above the hint. */
+@media (max-width: 760px), (max-height: 520px) {
+  #hud-heart {
+    top: calc(8px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    right: calc(10px + env(safe-area-inset-right));
+    transform: none;
+    min-width: 0;
+    padding: 7px 12px 9px;
+  }
+
+  #hud-score {
+    top: calc(64px + env(safe-area-inset-top));
+    right: calc(10px + env(safe-area-inset-right));
+    min-width: 150px;
+    padding: 7px 10px;
+    font-size: 11.5px;
+  }
+  #vx-score-val, #vx-xp-val { font-size: 13px; }
+  .hud-xp-next { font-size: 10px; }
+
+  /* Settings panel lives in a drawer (indented past the FAB column so the
+     ⚙️/⏸ buttons stay visible); the board tags along below it. */
+  #hud-top { display: none; }
+  body.hud-open #hud-top {
+    display: block;
+    top: calc(64px + env(safe-area-inset-top));
+    left: calc(58px + env(safe-area-inset-left));
+    bottom: calc(42% + env(safe-area-inset-bottom));
+    width: min(300px, calc(100vw - 78px));
+    overflow-y: auto;
+    z-index: 45;
+  }
+  #hud-board { display: none; }
+  body.hud-open #hud-board {
+    display: block;
+    top: calc(58% + 6px);
+    left: calc(58px + env(safe-area-inset-left));
+    right: auto;
+    bottom: calc(150px + env(safe-area-inset-bottom));
+    width: min(300px, calc(100vw - 78px));
+    min-width: 0;
+    max-height: none;
+    padding: 8px 12px;
+    font-size: 11.5px;
+    z-index: 45;
+  }
+
+  .hud-fab { display: flex; }
+  #vx-menu-btn {
+    top: calc(64px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+  }
+  #vx-pause-btn {
+    top: calc(114px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    right: auto;
+    bottom: auto;
+  }
+
+  #hud-shop {
+    left: calc(10px + env(safe-area-inset-left));
+    right: calc(10px + env(safe-area-inset-right));
+    bottom: calc(52px + env(safe-area-inset-bottom));
+    transform: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+    padding: 8px;
+  }
+  #hud-shop button { padding: 9px 8px; font-size: 13px; }
+
+  #hud-hint {
+    bottom: calc(6px + env(safe-area-inset-bottom));
+    padding: 4px 10px;
+    font-size: 10.5px;
+    white-space: normal;
+    text-align: center;
+    max-width: calc(100vw - 96px); /* keeps clear of the version badge */
+  }
+
+  #hud-version {
+    bottom: calc(2px + env(safe-area-inset-bottom));
+    right: 6px;
+    font-size: 9px;
+  }
+
+  #vx-toast {
+    top: calc(70px + env(safe-area-inset-top));
+    white-space: normal;
+    max-width: 92vw;
+    text-align: center;
+    font-size: 13.5px;
+  }
+
+  .title-panel { padding: 20px 18px 18px; }
+  .title-logo { font-size: 27px; }
+  .go-panel { padding: 20px 18px 18px; }
+}
+
+/* Landscape phones: not enough height for the drawer + board stack — the
+   board collapses and the drawer takes the full height above the shop. */
+@media (max-height: 520px) {
+  body.hud-open #hud-top { bottom: calc(120px + env(safe-area-inset-bottom)); }
+  body.hud-open #hud-board { display: none; }
 }
