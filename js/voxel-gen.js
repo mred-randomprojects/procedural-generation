@@ -276,6 +276,16 @@ let spawnsPerKill = 2; // fresh zombies spawned per player blast kill
 let spawnsPerEat = 1; // fresh zombies spawned per zombie eaten by another zombie (0 = the strong thin the herd)
 let speedPerLevel = 0.3; // extra speed a zombie gains per level past 1
 let simSpeed = 1; // time multiplier for the zombie sim (movement + combat), not the player's missiles
+let hpPerLevel = 1; // extra max HP per level past 1 — crank it to make elites tanky against blasts too
+let dmgPerLevel = 1; // extra DPS per level past 1 dealt in zombie-vs-zombie fights
+let atkPerLevel = 0.25; // attack-rate growth per level past 1 (0 = every level shoots at the same cadence)
+
+// Max HP and fight-DPS as functions of level, both anchored at 1 for a
+// level-1 zombie and growing by their sliders. Blast damage stays flat
+// (1, 2 in the core), so raising hpPerLevel directly makes high levels
+// harder for the PLAYER to kill, not just for other zombies.
+function maxHpFor(level) { return 1 + (level - 1) * hpPerLevel; }
+function dpsFor(level) { return 1 + (level - 1) * dmgPerLevel; }
 
 // No cap, deliberately — a high-level zombie is hard-won (see
 // eatsNeededForLevel) so it should keep getting faster forever, but linearly:
@@ -342,11 +352,11 @@ function disposeMonsterUi(m) {
   m.healthFill.material.dispose();
 }
 
-// Attack cadence: higher levels shoot faster. Damage per projectile is
-// scaled by the interval so DPS stays exactly = the attacker's level — the
-// balance rule ("a level X zombie deals X damage per second") survives the
-// projectile rework unchanged, it's just delivered in discrete visible shots.
-function attackInterval(level) { return 1.0 / (1 + 0.25 * (level - 1)); }
+// Attack cadence: higher levels shoot faster (rate growth per level is the
+// atkPerLevel slider). Damage per projectile is scaled by the interval so
+// actual DPS is exactly dpsFor(level) regardless of how fast the shots come
+// — cadence is presentation, the damage sliders control the math.
+function attackInterval(level) { return 1.0 / (1 + atkPerLevel * (level - 1)); }
 
 // Any two zombies that wander close enough fight it out — no same-level
 // restriction. Fighters STOP moving, square up face to face, and lob
@@ -397,7 +407,7 @@ function fireZombieProjectile(shooter, target) {
   root.add(mesh);
   zombieProjectiles.push({
     mesh, shooter, target,
-    dmg: level * attackInterval(level), // interval-scaled → DPS = level
+    dmg: dpsFor(level) * attackInterval(level), // interval-scaled → DPS = dpsFor(level)
     speed: 7,
   });
 }
@@ -469,7 +479,7 @@ function resolveZombieKill(killer, loser) {
   while (killer.eatXp >= eatsNeededForLevel(killer.stackLevel)) {
     killer.eatXp -= eatsNeededForLevel(killer.stackLevel);
     killer.stackLevel++;
-    killer.hp = killer.stackLevel; // leveling up fully heals
+    killer.hp = maxHpFor(killer.stackLevel); // leveling up fully heals
     killer.speed = stackSpeed(killer.stackLevel) + Math.random() * 0.2;
   }
   updateZombieBoard();
@@ -607,13 +617,13 @@ function updateMonsters(dt, now) {
     m.rig.armR.rotation.x = -1.15 + swing * 0.3;
 
     // Health bar — only shown once damaged, hidden again at full HP.
-    const damaged = m.hp < m.stackLevel;
+    const damaged = m.hp < maxHpFor(m.stackLevel);
     m.healthBg.visible = m.healthFill.visible = damaged;
     if (damaged) {
       const barY = m.visualY + hpBarOffset(m.stackLevel);
       m.healthBg.position.set(m.x, barY, m.z);
       m.healthFill.position.set(m.x, barY, m.z);
-      const ratio = Math.max(0, m.hp / m.stackLevel);
+      const ratio = Math.max(0, m.hp / maxHpFor(m.stackLevel));
       m.healthFill.scale.set(HP_BAR_INNER_W * ratio, HP_BAR_INNER_H, 1);
       m.healthFill.material.color.setHex(ratio > 0.5 ? 0x4fd68a : ratio > 0.25 ? 0xffcf5a : 0xff5a4a);
     }
@@ -1540,16 +1550,21 @@ function init() {
     if (dragging) {
       const dxPix = e.clientX - lastX, dyPix = e.clientY - lastY;
       if (panDragging) {
+        // Free pan — no bounds. Digging has no floor, so the camera can't
+        // have one either: clamping the target made deep pits and the map's
+        // underside literally unviewable.
         const scale = 0.045 / zoomLevel;
         const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
         const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
         target.addScaledVector(right, -dxPix * scale);
         target.addScaledVector(fwd, -dyPix * scale);
-        target.x = Math.max(2, Math.min(GRID - 2, target.x));
-        target.z = Math.max(2, Math.min(GRID - 2, target.z));
       } else {
         theta -= dxPix * 0.006;
-        phi = Math.min(1.45, Math.max(0.25, phi - dyPix * 0.006));
+        // Near-full vertical orbit: from almost level with the horizon (you
+        // can look at the terrain edge-on, even slightly from below) to
+        // almost straight down. Only an epsilon off the exact poles, where
+        // the orbit math degenerates.
+        phi = Math.min(1.55, Math.max(0.02, phi - dyPix * 0.006));
       }
       lastX = e.clientX; lastY = e.clientY;
     }
@@ -1563,7 +1578,9 @@ function init() {
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const factor = Math.exp(-e.deltaY * 0.0015);
-    zoomLevel = Math.min(4, Math.max(0.35, zoomLevel * factor));
+    // Practically unbounded zoom — wide enough to frame the whole map from
+    // afar or fill the screen with a single block.
+    zoomLevel = Math.min(40, Math.max(0.05, zoomLevel * factor));
     onResize();
   }, { passive: false });
 
@@ -1607,6 +1624,14 @@ function init() {
     for (const m of monsters) m.speed = stackSpeed(m.stackLevel) + Math.random() * 0.2;
   });
   bindSlider("vx-sim-speed", (v) => v.toFixed(1), (v) => { simSpeed = v; });
+  bindSlider("vx-hp-per-level", (v) => v.toFixed(2), (v) => {
+    hpPerLevel = v;
+    // Max HP just changed for everyone — heal all to their new full so no
+    // zombie is left with hp above max (or unfairly half-dead vs a new scale).
+    for (const m of monsters) m.hp = maxHpFor(m.stackLevel);
+  });
+  bindSlider("vx-dmg-per-level", (v) => v.toFixed(2), (v) => { dmgPerLevel = v; });
+  bindSlider("vx-atk-per-level", (v) => v.toFixed(2), (v) => { atkPerLevel = v; });
   document.getElementById("vx-spawn-one").addEventListener("click", () => spawnRandomZombie());
   document.getElementById("vx-new-terrain").addEventListener("click", () => {
     const seedInput2 = document.getElementById("vx-seed");
@@ -1653,8 +1678,7 @@ function loop() {
   if (keys["s"] || keys["arrowdown"]) target.addScaledVector(fwd, panSpeed);
   if (keys["a"] || keys["arrowleft"]) target.addScaledVector(right, panSpeed);
   if (keys["d"] || keys["arrowright"]) target.addScaledVector(right, -panSpeed);
-  target.x = Math.max(2, Math.min(GRID - 2, target.x));
-  target.z = Math.max(2, Math.min(GRID - 2, target.z));
+  // No pan bounds — see the mouse-pan handler for why.
 
   shake *= Math.exp(-4.5 * dt);
   processClickQueue();

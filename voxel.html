@@ -82,6 +82,27 @@
           <span class="hud-slider-val" id="vx-speed-per-level-val">0.30</span>
         </div>
       </div>
+      <div class="hud-slider-row" title="Extra max HP per level beyond 1 — high values make elites shrug off blasts too (all zombies heal to full when changed)">
+        <span class="hud-label">HP per level</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-hp-per-level" min="0" max="5" step="0.25" value="1" />
+          <span class="hud-slider-val" id="vx-hp-per-level-val">1.00</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="Extra fight damage-per-second per level beyond 1">
+        <span class="hud-label">Damage per level</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-dmg-per-level" min="0" max="5" step="0.25" value="1" />
+          <span class="hud-slider-val" id="vx-dmg-per-level-val">1.00</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="How much faster each level shoots (visual cadence; damage sliders control the actual DPS)">
+        <span class="hud-label">Attack speed per level</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-atk-per-level" min="0" max="1" step="0.05" value="0.25" />
+          <span class="hud-slider-val" id="vx-atk-per-level-val">0.25</span>
+        </div>
+      </div>
       <div class="hud-slider-row" title="Time multiplier for the zombie world (movement + fights); your missiles are unaffected">
         <span class="hud-label">Sim speed ×</span>
         <div class="hud-slider-inner">
