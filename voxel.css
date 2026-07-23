@@ -83,6 +83,40 @@ html, body {
   color: #ffcbb8;
 }
 
+#vx-tweaks {
+  margin-bottom: 7px;
+  border-top: 1px solid #2a3540;
+  padding-top: 6px;
+}
+#vx-tweaks summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #9fb0c0;
+  margin-bottom: 7px;
+  user-select: none;
+}
+#vx-tweaks summary:hover { color: #e6ebf1; }
+#vx-tweaks button {
+  background: #1d2833;
+  color: #e6ebf1;
+  border: 1px solid #33475c;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  width: 100%;
+}
+#vx-tweaks button:hover { filter: brightness(1.2); }
+#vx-tweaks select {
+  flex: 1;
+  background: rgba(16, 21, 27, 0.8);
+  color: #e6ebf1;
+  border: 1px solid #2a3540;
+  border-radius: 7px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 #vx-biome, #vx-spawn-delay {
   width: 100%;
   background: rgba(16, 21, 27, 0.8);

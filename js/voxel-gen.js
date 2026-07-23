@@ -70,9 +70,9 @@ const DEPTH_SPARE = 5;
 // it is not a ceiling. Do not add a cap here (or a general population cap
 // anywhere else in this file) without explicit user direction; if a limit
 // starts to feel necessary for performance, raise it with the user rather
-// than silently capping. Same-level zombies that touch fight via eatZombie()
+// than silently capping. Zombies that meet fight via resolveZombieKill()
 // — the loser dies but is immediately replaced elsewhere (see spawnRandomZombie
-// in eatZombie), so this is population-neutral: total count is driven ONLY by
+// in resolveZombieKill), so this is population-neutral: total count is driven ONLY by
 // player kills (net +1 per kill, since 1 dies and 2 spawn), never by zombies
 // eating each other.
 const MONSTER_COUNT = 9;
@@ -211,7 +211,7 @@ function spawnMonsters(biome, heights, seed) {
       timer: rand() * 2,
       phase: rand() * Math.PI * 2,
       walkPhase: rand() * Math.PI * 2,
-      hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0,
+      hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
       ...initVerticalState(x, z),
       ...createMonsterUi(),
     });
@@ -243,7 +243,7 @@ function spawnRandomZombie() {
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
-    hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0,
+    hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
     ...initVerticalState(x, z),
     ...createMonsterUi(),
   });
@@ -273,11 +273,16 @@ function processPendingSpawns(now) {
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
+/* ---------- live-tweakable sim knobs (⚙️ Tweaks panel in the HUD) ---------- */
+let spawnsPerKill = 2; // fresh zombies spawned per player blast kill
+let speedPerLevel = 0.3; // extra speed a zombie gains per level past 1
+let simSpeed = 1; // time multiplier for the zombie sim (movement + combat), not the player's missiles
+
 // No cap, deliberately — a high-level zombie is hard-won (see
 // eatsNeededForLevel) so it should keep getting faster forever, but linearly:
-// x1 at level 1, +0.3 per level after (the earlier x1.5-compounding curve
-// made high levels comically untrackable).
-function stackSpeed(level) { return 1 + (level - 1) * 0.3; }
+// x1 at level 1, +speedPerLevel per level after (an earlier x1.5-compounding
+// curve made high levels comically untrackable).
+function stackSpeed(level) { return 1 + (level - 1) * speedPerLevel; }
 // Odd numbers: 1, 3, 5, 7, ... — how many zombies a zombie at this level must
 // eat to advance to the next level. Escalates faster than a flat rate so
 // early levels come quickly but high levels are a real achievement.
@@ -338,48 +343,106 @@ function disposeMonsterUi(m) {
   m.healthFill.material.dispose();
 }
 
+// Attack cadence: higher levels shoot faster. Damage per projectile is
+// scaled by the interval so DPS stays exactly = the attacker's level — the
+// balance rule ("a level X zombie deals X damage per second") survives the
+// projectile rework unchanged, it's just delivered in discrete visible shots.
+function attackInterval(level) { return 1.0 / (1 + 0.25 * (level - 1)); }
+
 // Any two zombies that wander close enough fight it out — no same-level
-// restriction. Each deals damage-per-second equal to its OWN level (so a
-// level 8 hits three times as hard as a level... no, exactly 8x as hard as a
-// level 1) to the other, simultaneously, every frame they stay in range. A
-// fresh, undamaged fight between equal levels is always an exact tie (same hp
-// pool, same dps, both hit 0 at the same instant) — broken by a coin flip, so
-// same-level fights still feel like a toss-up. But hp persists between
-// fights (and blast damage!), so a higher-level zombie that already took a
-// beating CAN lose to a weaker one that catches it while it's hurt — the
-// nominal level is a strong favorite, not a guarantee.
+// restriction. Fighters STOP moving, square up face to face, and lob
+// projectiles at each other; each projectile carries its shooter's
+// level-scaled damage, so a fresh fight between equal levels is still an
+// even coin-toss while a higher level is a strong favorite. hp persists
+// between fights (and blast damage!), so a wounded big zombie CAN lose to a
+// fresh runt. Reach scales with both fighters' body size — a big zombie
+// starts shooting from further out.
 function updateZombieCombat(dt) {
+  for (const m of monsters) m.fightTarget = null;
   for (let i = 0; i < monsters.length; i++) {
     const a = monsters[i];
     for (let j = i + 1; j < monsters.length; j++) {
       const b = monsters[j];
-      // Reach scales with each fighter's body size (stackScale), so a big
-      // high-level zombie starts landing hits from further out — it doesn't
-      // need to physically overlap a runt to grab it.
-      const reach = EAT_DIST * (stackScale(a.stackLevel) + stackScale(b.stackLevel)) / 2;
+      const reach = EAT_DIST * 1.6 * (stackScale(a.stackLevel) + stackScale(b.stackLevel)) / 2;
       if (Math.hypot(a.x - b.x, a.z - b.z) >= reach) continue;
-      a.hp -= b.stackLevel * dt;
-      b.hp -= a.stackLevel * dt;
-      const aDead = a.hp <= 0, bDead = b.hp <= 0;
-      if (!aDead && !bDead) continue;
-      // Mutual kill (rare — needs equal hp/dps on both sides): coin flip who
-      // narrowly comes out on top, since our model needs one survivor to eat.
-      const bWins = aDead && (bDead ? Math.random() < 0.5 : true);
-      eatZombie(bWins ? b : a, bWins ? a : b);
-      return; // arrays mutated — resume scanning next frame
+      if (!a.fightTarget) a.fightTarget = b;
+      if (!b.fightTarget) b.fightTarget = a;
     }
+  }
+  for (const m of monsters) {
+    if (!m.fightTarget) continue;
+    m.attackTimer -= dt;
+    if (m.attackTimer <= 0) {
+      m.attackTimer = attackInterval(m.stackLevel);
+      fireZombieProjectile(m, m.fightTarget);
+    }
+  }
+  updateZombieProjectiles(dt);
+}
+
+// A glowing bile blob lobbed from attacker to target — the actual damage
+// carrier. Size grows with the shooter's level so a high-level zombie's
+// shots read as genuinely dangerous from across the map.
+let zombieProjectiles = [];
+
+function fireZombieProjectile(shooter, target) {
+  const level = shooter.stackLevel;
+  const radius = 0.07 + Math.min(0.5, level * 0.035);
+  const geo = new THREE.SphereGeometry(radius, 8, 6);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x8aff3a, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(shooter.x, shooter.visualY + 1.2 * stackScale(level), shooter.z);
+  root.add(mesh);
+  zombieProjectiles.push({
+    mesh, shooter, target,
+    dmg: level * attackInterval(level), // interval-scaled → DPS = level
+    speed: 7,
+  });
+}
+
+function updateZombieProjectiles(dt) {
+  for (let i = zombieProjectiles.length - 1; i >= 0; i--) {
+    const p = zombieProjectiles[i];
+    // Target already died/got eaten mid-flight: the blob fizzles out.
+    if (!monsters.includes(p.target)) {
+      root.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      zombieProjectiles.splice(i, 1);
+      continue;
+    }
+    const tx = p.target.x, ty = p.target.visualY + 0.9 * stackScale(p.target.stackLevel), tz = p.target.z;
+    const dx = tx - p.mesh.position.x, dy = ty - p.mesh.position.y, dz = tz - p.mesh.position.z;
+    const dist = Math.hypot(dx, dy, dz);
+    const step = p.speed * dt;
+    if (dist <= Math.max(0.25, step)) {
+      // Hit: apply the damage, then resolve a possible kill.
+      p.target.hp -= p.dmg;
+      root.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      zombieProjectiles.splice(i, 1);
+      if (p.target.hp <= 0) resolveZombieKill(p.shooter, p.target);
+      continue;
+    }
+    p.mesh.position.x += (dx / dist) * step;
+    p.mesh.position.y += (dy / dist) * step;
+    p.mesh.position.z += (dz / dist) * step;
   }
 }
 
 // The loser is killed outright and immediately replaced by a fresh level-1
 // zombie elsewhere on the map, so zombie-on-zombie combat never shrinks the
 // total population: only a player blast kill (see killMonstersNear, which
-// spawns 2 replacements) changes the total count. The winner earns XP equal
-// to the LOSER'S level — eating something tougher is worth proportionally
-// more, same idea as a real RPG — and can level up multiple times off one
-// huge kill. No ceiling: left alone long enough, constantly-replenished weak
+// spawns replacements) changes the total count. The killer earns XP equal to
+// the LOSER'S level — eating something tougher is worth proportionally more,
+// same idea as a real RPG — and can level up multiple times off one huge
+// kill. No ceiling: left alone long enough, constantly-replenished weak
 // zombies feed a slow "survival of the fittest" climb toward one monster.
-function eatZombie(winner, loser) {
+function resolveZombieKill(killer, loser) {
   const lx = loser.x, lz = loser.z;
   monsterGroup.remove(loser.rig.root);
   disposeZombieMaterials(loser.mats);
@@ -393,18 +456,21 @@ function eatZombie(winner, loser) {
   // (subject to the HUD Respawn delay/off control).
   queueZombieSpawn();
 
-  // A quick lunge toward the kill spot sells the "eating" motion.
-  winner.x += (lx - winner.x) * 0.5;
-  winner.z += (lz - winner.z) * 0.5;
-  winner.eatPulse = 0.3;
-  winner.hp = Math.max(winner.hp, 1); // survives even a near-mutual kill
+  // The killer may itself have died from a crossing projectile in the same
+  // instant — a corpse doesn't eat, so the XP just goes unclaimed.
+  if (!monsters.includes(killer)) return;
 
-  winner.eatXp += loser.stackLevel;
-  while (winner.eatXp >= eatsNeededForLevel(winner.stackLevel)) {
-    winner.eatXp -= eatsNeededForLevel(winner.stackLevel);
-    winner.stackLevel++;
-    winner.hp = winner.stackLevel; // leveling up fully heals
-    winner.speed = stackSpeed(winner.stackLevel) + Math.random() * 0.2;
+  // A quick lunge toward the kill spot sells the "eating" motion.
+  killer.x += (lx - killer.x) * 0.5;
+  killer.z += (lz - killer.z) * 0.5;
+  killer.eatPulse = 0.3;
+
+  killer.eatXp += loser.stackLevel;
+  while (killer.eatXp >= eatsNeededForLevel(killer.stackLevel)) {
+    killer.eatXp -= eatsNeededForLevel(killer.stackLevel);
+    killer.stackLevel++;
+    killer.hp = killer.stackLevel; // leveling up fully heals
+    killer.speed = stackSpeed(killer.stackLevel) + Math.random() * 0.2;
   }
   updateZombieBoard();
 }
@@ -469,22 +535,30 @@ function showToast(text) {
 
 function updateMonsters(dt, now) {
   for (const m of monsters) {
-    m.timer -= dt;
-    if (m.timer <= 0) {
-      m.angle = Math.random() * Math.PI * 2;
-      m.timer = 1.5 + Math.random() * 2.5;
-    }
-    const nx = m.x + Math.sin(m.angle) * m.speed * dt;
-    const nz = m.z + Math.cos(m.angle) * m.speed * dt;
-    const inBounds = nx > 2 && nx < GRID - 3 && nz > 2 && nz < GRID - 3;
     let moving = false;
-    // Zombies can walk anywhere regardless of elevation — no slope/height gate
-    // at all, only actual water (see isWaterAt) and the map edge stop them.
-    if (inBounds && !isWaterAt(nx, nz)) {
-      m.x = nx; m.z = nz;
-      moving = true;
+    // Mid-fight (fightTarget set by updateZombieCombat, one frame behind):
+    // plant feet and square up toward the opponent — all damage comes from
+    // the projectiles, so a fighting zombie stands its ground and shoots.
+    const fighting = m.fightTarget && monsters.includes(m.fightTarget);
+    if (fighting) {
+      m.angle = Math.atan2(m.fightTarget.x - m.x, m.fightTarget.z - m.z);
     } else {
-      m.angle += Math.PI + (Math.random() - 0.5);
+      m.timer -= dt;
+      if (m.timer <= 0) {
+        m.angle = Math.random() * Math.PI * 2;
+        m.timer = 1.5 + Math.random() * 2.5;
+      }
+      const nx = m.x + Math.sin(m.angle) * m.speed * dt;
+      const nz = m.z + Math.cos(m.angle) * m.speed * dt;
+      const inBounds = nx > 2 && nx < GRID - 3 && nz > 2 && nz < GRID - 3;
+      // Zombies can walk anywhere regardless of elevation — no slope/height gate
+      // at all, only actual water (see isWaterAt) and the map edge stop them.
+      if (inBounds && !isWaterAt(nx, nz)) {
+        m.x = nx; m.z = nz;
+        moving = true;
+      } else {
+        m.angle += Math.PI + (Math.random() - 0.5);
+      }
     }
     // Smooth step-height changes into a hop instead of snapping. Climbing
     // gradually scales with how many blocks tall the step is (a 3-block climb
@@ -575,8 +649,9 @@ function killMonstersNear(bx, bz, r) {
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
     // No cap, intentionally — see the "no artificial limits" note near
-    // MONSTER_COUNT. Every kill spawns 2 more, unconditionally, forever.
-    let toSpawn = kills * 2;
+    // MONSTER_COUNT. Every kill spawns `spawnsPerKill` more (default 2, user
+    // tweakable down to 0 from the ⚙️ Tweaks panel), unconditionally, forever.
+    let toSpawn = kills * spawnsPerKill;
     while (toSpawn-- > 0) queueZombieSpawn();
   }
 }
@@ -604,7 +679,7 @@ function spawnHitFlinch(m) {
 }
 
 // Flash + shockwave at the spot a zombie got eaten — paired with a gib burst
-// (see eatZombie) so the kill reads as violent, not a polite hand-off.
+// (see resolveZombieKill) so the kill reads as violent, not a polite hand-off.
 function spawnEatFx(x, y, z) {
   const ringGeo = new THREE.RingGeometry(0.2, 0.35, 24);
   const ringMat = new THREE.MeshBasicMaterial({
@@ -811,7 +886,7 @@ function rebuildBlockMeshes() {
   }
 }
 
-function generateWorld(seed, biomeKey) {
+function generateWorld(seed, biomeKey, keepZombies = false) {
   const biome = BIOMES[biomeKey];
   currentBiome = biome;
   currentHeights = buildHeightmap(seed, biome);
@@ -866,9 +941,15 @@ function generateWorld(seed, biomeKey) {
   // staying visible — everything should render solid at all times.
   scene.fog = null;
 
-  // clear any missiles/fx left over from the previous world
+  // clear any missiles/zombie projectiles/fx left over from the previous world
   for (const m of missiles) root.remove(m.mesh);
   missiles = [];
+  for (const p of zombieProjectiles) {
+    root.remove(p.mesh);
+    p.mesh.geometry.dispose();
+    p.mesh.material.dispose();
+  }
+  zombieProjectiles = [];
   for (const p of fx) {
     root.remove(p.obj);
     if (!p.obj.isSprite) p.obj.geometry?.dispose?.();
@@ -877,7 +958,19 @@ function generateWorld(seed, biomeKey) {
   }
   fx = [];
 
-  spawnMonsters(biome, currentHeights, seed);
+  if (keepZombies) {
+    // Fresh land, same population: keep every zombie (level, hp, eat-XP and
+    // all) and just settle them onto the new ground where they stand. Score,
+    // XP and blast unlocks are untouched too.
+    currentSeaLevel = biome.seaLevel;
+    currentSeed = seed;
+    for (const m of monsters) {
+      m.fightTarget = null;
+      Object.assign(m, initVerticalState(m.x, m.z));
+    }
+  } else {
+    spawnMonsters(biome, currentHeights, seed);
+  }
 }
 
 /* ---------- missiles & explosions ---------- */
@@ -1499,6 +1592,35 @@ function init() {
     if (!isFinite(spawnDelay)) pendingSpawns = []; // turning production off also drops what's queued
   });
 
+  document.getElementById("vx-spawn-per-kill").addEventListener("change", (e) => {
+    spawnsPerKill = Number(e.target.value);
+  });
+  document.getElementById("vx-speed-per-level").addEventListener("change", (e) => {
+    speedPerLevel = Number(e.target.value);
+    // Re-derive every living zombie's speed from its level so the new slope
+    // applies immediately, not just to future spawns/level-ups.
+    for (const m of monsters) m.speed = stackSpeed(m.stackLevel) + Math.random() * 0.2;
+  });
+  document.getElementById("vx-sim-speed").addEventListener("change", (e) => {
+    simSpeed = Number(e.target.value);
+  });
+  document.getElementById("vx-spawn-one").addEventListener("click", () => spawnRandomZombie());
+  document.getElementById("vx-new-terrain").addEventListener("click", () => {
+    const seedInput2 = document.getElementById("vx-seed");
+    seedInput2.value = Math.random().toString(36).slice(2, 9);
+    generateWorld(seedInput2.value, biomeSelect.value, true);
+  });
+  document.getElementById("vx-kill-all").addEventListener("click", () => {
+    for (const m of monsters) {
+      monsterGroup.remove(m.rig.root);
+      disposeZombieMaterials(m.mats);
+      disposeMonsterUi(m);
+    }
+    monsters = [];
+    pendingSpawns = [];
+    updateZombieBoard();
+  });
+
   regenerate(false);
   requestAnimationFrame(loop);
 }
@@ -1533,8 +1655,8 @@ function loop() {
 
   shake *= Math.exp(-4.5 * dt);
   processClickQueue();
-  updateMonsters(dt, now);
-  updateZombieCombat(dt);
+  updateMonsters(dt * simSpeed, now);
+  updateZombieCombat(dt * simSpeed);
   processPendingSpawns(now);
   updateMissiles(dt);
   updateFx(dt);
