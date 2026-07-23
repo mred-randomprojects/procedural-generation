@@ -287,6 +287,13 @@ let atkPerLevel = 0.25; // attack-rate growth per level past 1 (0 = every level 
 function maxHpFor(level) { return 1 + (level - 1) * hpPerLevel; }
 function dpsFor(level) { return 1 + (level - 1) * dmgPerLevel; }
 
+// Flat armor against zombie-vs-zombie projectiles: a level-X zombie shrugs
+// off X-2 points of incoming DPS. With default damage (DPS = attacker's
+// level) that means anything more than 2 levels below its target can't
+// scratch it at all — runts simply cannot gang up on an elite. Player
+// blasts ignore defense entirely.
+function defenseFor(level) { return Math.max(0, level - 2); }
+
 // No cap, deliberately — a high-level zombie is hard-won (see
 // eatsNeededForLevel) so it should keep getting faster forever, but linearly:
 // x1 at level 1, +speedPerLevel per level after (an earlier x1.5-compounding
@@ -407,7 +414,11 @@ function fireZombieProjectile(shooter, target) {
   root.add(mesh);
   zombieProjectiles.push({
     mesh, shooter, target,
-    dmg: dpsFor(level) * attackInterval(level), // interval-scaled → DPS = dpsFor(level)
+    // Raw DPS + this shot's interval, kept separate so the target's defense
+    // (a DPS-denominated stat) can be subtracted at hit time — see
+    // updateZombieProjectiles.
+    dps: dpsFor(level),
+    interval: attackInterval(level),
     speed: 7,
   });
 }
@@ -428,8 +439,11 @@ function updateZombieProjectiles(dt) {
     const dist = Math.hypot(dx, dy, dz);
     const step = p.speed * dt;
     if (dist <= Math.max(0.25, step)) {
-      // Hit: apply the damage, then resolve a possible kill.
-      p.target.hp -= p.dmg;
+      // Hit: damage after the target's flat armor (defenseFor, in DPS
+      // terms — an attacker whose DPS doesn't clear it deals nothing),
+      // then resolve a possible kill.
+      const effDmg = Math.max(0, (p.dps - defenseFor(p.target.stackLevel)) * p.interval);
+      p.target.hp -= effDmg;
       root.remove(p.mesh);
       p.mesh.geometry.dispose();
       p.mesh.material.dispose();
