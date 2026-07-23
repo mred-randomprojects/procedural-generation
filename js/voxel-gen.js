@@ -6,42 +6,42 @@ import { playExplosion, playZombieKill } from "./voxel-audio.js";
 
 const BIOMES = {
   plains: {
-    scale: 1.6, octaves: 4, heightMul: 4, baseHeight: 4,
+    scale: 1.6, octaves: 4, heightMul: 6, baseHeight: 5,
     seaLevel: -1, treeDensity: 0.02,
     top: 0x6cbf4f, sub: 0x8a5a34, rock: 0x8a8a8a,
     sand: 0xdccb7a, snowLine: 999, snow: 0xffffff,
     water: 0x3a7bd5, sky: [0x9fd6ff, 0xd8f0ff],
   },
   desert: {
-    scale: 2.0, octaves: 4, heightMul: 3, baseHeight: 3,
+    scale: 2.0, octaves: 4, heightMul: 4, baseHeight: 4,
     seaLevel: -3, treeDensity: 0.0,
     top: 0xe3c877, sub: 0xcaa85c, rock: 0x9c8452,
     sand: 0xe3c877, snowLine: 999, snow: 0xffffff,
     water: 0x2f7fb0, sky: [0xffd9a0, 0xfff2d8],
   },
   snowy: {
-    scale: 1.8, octaves: 4, heightMul: 5, baseHeight: 5,
+    scale: 1.8, octaves: 4, heightMul: 7, baseHeight: 6,
     seaLevel: -1, treeDensity: 0.012,
     top: 0xf4f8fb, sub: 0x8a5a34, rock: 0x8f97a0,
     sand: 0xe7edf2, snowLine: 2, snow: 0xffffff,
     water: 0x3f6f9c, sky: [0xbcd7e8, 0xeaf4fb],
   },
   islands: {
-    scale: 1.5, octaves: 5, heightMul: 6, baseHeight: 1,
+    scale: 1.5, octaves: 5, heightMul: 8, baseHeight: 2,
     seaLevel: 1, treeDensity: 0.03,
     top: 0x5fc25a, sub: 0x8a6a34, rock: 0x7f7f7f,
     sand: 0xe8d692, snowLine: 999, snow: 0xffffff,
     water: 0x2489c9, sky: [0x7fd6ff, 0xd0f4ff],
   },
   mountains: {
-    scale: 1.6, octaves: 5, heightMul: 14, baseHeight: 4,
+    scale: 1.6, octaves: 5, heightMul: 20, baseHeight: 5,
     seaLevel: -2, treeDensity: 0.015,
     top: 0x5c9a4b, sub: 0x7a5a3a, rock: 0x767b80,
     sand: 0xd4c483, snowLine: 9, snow: 0xffffff,
     water: 0x2f6fa8, sky: [0x8fb8e0, 0xdcecfb],
   },
   swamp: {
-    scale: 3.4, octaves: 3, heightMul: 3, baseHeight: 2,
+    scale: 3.4, octaves: 3, heightMul: 4, baseHeight: 3,
     seaLevel: 0, treeDensity: 0.025,
     top: 0x5a7a3f, sub: 0x4a3c28, rock: 0x6f6f60,
     sand: 0xa9a06a, snowLine: 999, snow: 0xffffff,
@@ -50,7 +50,10 @@ const BIOMES = {
 };
 
 const GRID = 44;
-const DEPTH_LAYERS = 4; // rendered layers below the surface, deep enough for side views
+// Rendered layers below the surface. Digging has no floor — craters carve
+// indefinitely deeper instead of healing — so this is the constant buffer of
+// diggable rock always visible below whatever the deepest point currently is.
+const DEPTH_LAYERS = 9;
 
 const MONSTER_COUNT = 9;
 const MERGE_DIST = 0.85;
@@ -63,8 +66,6 @@ function blastUnlockCost(r) {
   const extra = r - 8;
   return 550 + extra * (300 + (extra - 1) * 150);
 }
-const REGEN_DELAY = 6;    // seconds of no explosions before terrain starts healing
-const REGEN_INTERVAL = 0.5; // seconds between regrowth ticks
 
 let renderer, scene, camera, root;
 let blockMeshes, blockGeo, water, activeMaterials;
@@ -74,16 +75,15 @@ let theta = Math.PI / 4, phi = 0.95, dist = 46, zoomLevel = 1;
 let target = new THREE.Vector3(GRID / 2, 0, GRID / 2);
 const keys = {};
 
-let monsterGroup, monsters = [];
+let monsterGroup, monsterUiGroup, glowTex, monsters = [];
 let treeGroup, treeList = [];
-let currentHeights = null, originalHeights = null, currentSeaLevel = -99, currentBiome = null, scorched = null;
+let currentHeights = null, currentSeaLevel = -99, currentBiome = null, scorched = null;
 let currentSeed = "terra", monsterIdCounter = 0;
 let lastTime = 0;
 let panHoldTime = 0;
 let maxUnlockedBlast = STARTING_MAX_BLAST;
 let shake = 0;
 let killCount = 0, xp = 0;
-let lastExplosionTime = -999, regenTimer = 0;
 let lastBlastX = 0, lastBlastZ = 0;
 
 let raycaster, missiles = [], fx = [];
@@ -151,6 +151,7 @@ function spawnMonsters(biome, heights, seed) {
   if (monsterGroup) {
     for (const m of monsters) disposeZombieMaterials(m.mats);
     clearGroup(monsterGroup);
+    clearGroup(monsterUiGroup);
   }
   monsters = [];
   currentHeights = heights;
@@ -178,6 +179,7 @@ function spawnMonsters(biome, heights, seed) {
       walkPhase: rand() * Math.PI * 2,
       hp: 1, stackLevel: 1,
       ...initVerticalState(x, z),
+      ...createMonsterUi(1),
     });
   }
   killCount = 0;
@@ -209,12 +211,84 @@ function spawnRandomZombie() {
     walkPhase: Math.random() * Math.PI * 2,
     hp: 1, stackLevel: 1,
     ...initVerticalState(x, z),
+    ...createMonsterUi(1),
   });
   updateZombieBoard();
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
-function stackSpeed(level) { return Math.max(0.32, 1.0 - (level - 1) * 0.07); }
+function stackSpeed(level) { return Math.min(4.5, 1.0 + (level - 1) * 0.18); }
+
+const HP_BAR_W = 0.9, HP_BAR_H = 0.13;
+const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
+
+// How far above a zombie's feet its health bar / aura should float, scaled
+// to how tall that particular stack level actually renders.
+function hpBarOffset(level) { return 1.95 * stackScale(level) + 0.35; }
+
+// Aura color ramps from warm orange (just-merged) through magenta to a hot
+// pink/red as the stack gets absurd — a quick "how dangerous is this" read.
+function auraColor(level) {
+  const t = Math.min(1, (level - 2) / 8);
+  const hue = (30 - t * 90 + 360) % 360;
+  return new THREE.Color().setHSL(hue / 360, 0.85, 0.55);
+}
+
+// Soft white radial-gradient texture, built once and shared (tinted per
+// instance via SpriteMaterial.color) by every zombie's aura glow.
+function buildGlowTexture() {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.4, "rgba(255,255,255,0.5)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Health bar (background + fill, both anchored left via Sprite.center so the
+// fill drains correctly regardless of camera angle) plus a soft glow aura for
+// stacked zombies. All added to monsterUiGroup so world-reset cleanup is free.
+function createMonsterUi(level) {
+  const bgMat = new THREE.SpriteMaterial({ color: 0x120a08, transparent: true, opacity: 0.75, depthTest: false });
+  const fillMat = new THREE.SpriteMaterial({ color: 0x4fd68a, transparent: true, opacity: 0.95, depthTest: false });
+  const healthBg = new THREE.Sprite(bgMat);
+  const healthFill = new THREE.Sprite(fillMat);
+  healthBg.center.set(0, 0.5);
+  healthFill.center.set(0, 0.5);
+  healthBg.scale.set(HP_BAR_W, HP_BAR_H, 1);
+  healthBg.visible = healthFill.visible = false;
+  healthBg.renderOrder = 997;
+  healthFill.renderOrder = 998;
+  monsterUiGroup.add(healthBg, healthFill);
+
+  const auraMat = new THREE.SpriteMaterial({
+    map: glowTex, color: auraColor(level), transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+  });
+  const aura = new THREE.Sprite(auraMat);
+  aura.renderOrder = 996;
+  aura.visible = level >= 2;
+  monsterUiGroup.add(aura);
+
+  return { healthBg, healthFill, aura };
+}
+
+// Removes one zombie's UI sprites — never disposes .geometry (Sprites share a
+// module-level singleton) or the shared aura glow texture, only the
+// per-instance materials.
+function disposeMonsterUi(m) {
+  monsterUiGroup.remove(m.healthBg, m.healthFill, m.aura);
+  m.healthBg.material.dispose();
+  m.healthFill.material.dispose();
+  m.aura.material.dispose();
+}
 
 // Zombies of the SAME level that wander into each other fuse into one
 // zombie one level higher (1+1→2, 2+2→3, 3+3→4, ...), with no ceiling —
@@ -225,6 +299,8 @@ function mergeZombies(a, b) {
   monsterGroup.remove(a.rig.root, b.rig.root);
   disposeZombieMaterials(a.mats);
   disposeZombieMaterials(b.mats);
+  disposeMonsterUi(a);
+  disposeMonsterUi(b);
   monsters.splice(monsters.indexOf(b), 1);
   monsters.splice(monsters.indexOf(a), 1);
 
@@ -243,6 +319,7 @@ function mergeZombies(a, b) {
     walkPhase: Math.random() * Math.PI * 2,
     hp: level, stackLevel: level,
     ...initVerticalState(mx, mz),
+    ...createMonsterUi(level),
   });
   updateZombieBoard();
 }
@@ -367,6 +444,27 @@ function updateMonsters(dt, now) {
     m.rig.legR.rotation.x = -swing;
     m.rig.armL.rotation.x = -1.15 - swing * 0.3;
     m.rig.armR.rotation.x = -1.15 + swing * 0.3;
+
+    // Health bar — only shown once damaged, hidden again at full HP.
+    const damaged = m.hp < m.stackLevel;
+    m.healthBg.visible = m.healthFill.visible = damaged;
+    if (damaged) {
+      const barY = m.visualY + hpBarOffset(m.stackLevel);
+      m.healthBg.position.set(m.x, barY, m.z);
+      m.healthFill.position.set(m.x, barY, m.z);
+      const ratio = Math.max(0, m.hp / m.stackLevel);
+      m.healthFill.scale.set(HP_BAR_INNER_W * ratio, HP_BAR_INNER_H, 1);
+      m.healthFill.material.color.setHex(ratio > 0.5 ? 0x4fd68a : ratio > 0.25 ? 0xffcf5a : 0xff5a4a);
+    }
+
+    // Aura — a gently pulsing glow for any zombie that has merged at least once.
+    if (m.stackLevel >= 2) {
+      const auraY = m.visualY + hpBarOffset(m.stackLevel) * 0.55;
+      m.aura.position.set(m.x, auraY, m.z);
+      const pulse = 0.85 + 0.15 * Math.sin(now * 2.6 + m.phase);
+      m.aura.scale.setScalar(stackScale(m.stackLevel) * 1.8 * pulse);
+      m.aura.material.opacity = 0.35 + 0.15 * Math.sin(now * 2.6 + m.phase);
+    }
   }
 }
 
@@ -384,6 +482,7 @@ function killMonstersNear(bx, bz, r) {
     }
     monsterGroup.remove(m.rig.root);
     disposeZombieMaterials(m.mats);
+    disposeMonsterUi(m);
     spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
     monsters.splice(i, 1);
     kills++;
@@ -510,7 +609,9 @@ function layerType(biome, y, height) {
 function clearGroup(group) {
   while (group.children.length) {
     const c = group.children.pop();
-    c.traverse((obj) => { obj.geometry?.dispose?.(); });
+    // THREE.Sprite instances all share one module-level geometry singleton —
+    // disposing it would break every other sprite in the app, so skip those.
+    c.traverse((obj) => { if (!obj.isSprite) obj.geometry?.dispose?.(); });
     if (c.material) {
       if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
       else c.material.dispose();
@@ -530,7 +631,7 @@ function rebuildBlockMeshes() {
     for (let x = 0; x < GRID; x++) {
       const idx = z * GRID + x;
       const height = heights[idx];
-      const bottom = Math.max(0, height - DEPTH_LAYERS + 1);
+      const bottom = height - DEPTH_LAYERS + 1; // no floor clamp — always DEPTH_LAYERS of rock below, however deep
       for (let y = height; y >= bottom; y--) {
         let type = layerType(biome, y, height);
         if (y === height && scorched[idx]) type = "charred";
@@ -567,10 +668,7 @@ function generateWorld(seed, biomeKey) {
   const biome = BIOMES[biomeKey];
   currentBiome = biome;
   currentHeights = buildHeightmap(seed, biome);
-  originalHeights = currentHeights.slice();
   scorched = new Uint8Array(GRID * GRID);
-  lastExplosionTime = -999;
-  regenTimer = 0;
   const rand = mulberry32(hashSeed(seed + ":trees"));
 
   if (activeMaterials) disposeBlockMaterials(activeMaterials.materials);
@@ -621,7 +719,8 @@ function generateWorld(seed, biomeKey) {
   missiles = [];
   for (const p of fx) {
     root.remove(p.obj);
-    p.obj.geometry?.dispose?.();
+    if (!p.obj.isSprite) p.obj.geometry?.dispose?.();
+    p.obj.material?.map?.dispose?.();
     p.obj.material?.dispose?.();
   }
   fx = [];
@@ -642,12 +741,32 @@ function raycastGround(clientX, clientY) {
   return hits.length ? hits[0].point : null;
 }
 
-// No cooldown — every valid click queues its own missile immediately, so N
-// quick clicks always land exactly N shots.
-function tryFireMissile(clientX, clientY) {
-  const point = raycastGround(clientX, clientY);
-  if (!point) return;
-  fireMissile(point.x, point.y, point.z);
+// Every click is captured into this queue immediately, even if it can't be
+// resolved to a ground point right away — no cooldown, and no click is ever
+// silently dropped. Drained every frame in the render loop: a click that
+// resolves fires instantly (usually the very next frame), and one that
+// still hasn't resolved after a few attempts (e.g. it was aimed at open
+// sky, not terrain) is discarded rather than retried forever.
+let clickQueue = [];
+const CLICK_MAX_ATTEMPTS = 6;
+
+function queueClick(clientX, clientY) {
+  clickQueue.push({ clientX, clientY, attempts: 0 });
+}
+
+function processClickQueue() {
+  if (clickQueue.length === 0) return;
+  const remaining = [];
+  for (const c of clickQueue) {
+    const point = raycastGround(c.clientX, c.clientY);
+    if (point) {
+      fireMissile(point.x, point.y, point.z);
+      continue;
+    }
+    c.attempts++;
+    if (c.attempts < CLICK_MAX_ATTEMPTS) remaining.push(c);
+  }
+  clickQueue = remaining;
 }
 
 // Preview of where a missile would land: a warm glow hovering over the spot,
@@ -744,7 +863,9 @@ function craterEdit(bx, bz) {
       if (d <= R) {
         const base = Math.max(1, Math.round((R - d) * 0.85 + 1));
         const carve = d <= coreR ? base * 2 : base;
-        currentHeights[idx] = Math.max(0, currentHeights[idx] - carve);
+        // No floor — digging the same spot keeps exposing new rock below
+        // rather than ever bottoming out into empty space.
+        currentHeights[idx] -= carve;
         scorched[idx] = 1;
       } else if (Math.random() < 0.55) {
         scorched[idx] = 1;
@@ -782,7 +903,6 @@ function spawnGibs(x, y, z) {
 function explodeAt(bx, bz) {
   const groundYBefore = heightAt(bx, bz) + 0.5;
   lastBlastX = bx; lastBlastZ = bz;
-  lastExplosionTime = performance.now() / 1000;
 
   craterEdit(bx, bz);
   destroyTreesNear(bx, bz, maxUnlockedBlast);
@@ -898,7 +1018,8 @@ function updateFx(dt) {
     const t = p.age / p.life;
     if (t >= 1) {
       root.remove(p.obj);
-      p.obj.geometry?.dispose?.();
+      // Sprites share one module-level geometry singleton — never dispose it.
+      if (!p.obj.isSprite) p.obj.geometry?.dispose?.();
       p.obj.material?.map?.dispose?.();
       p.obj.material?.dispose?.();
       fx.splice(i, 1);
@@ -1003,6 +1124,9 @@ function init() {
   root.add(treeGroup);
   monsterGroup = new THREE.Group();
   root.add(monsterGroup);
+  monsterUiGroup = new THREE.Group();
+  root.add(monsterUiGroup);
+  glowTex = buildGlowTexture();
 
   blockGeo = new THREE.BoxGeometry(1, 1, 1);
   raycaster = new THREE.Raycaster();
@@ -1048,7 +1172,7 @@ function init() {
     if (clickStartX === null) return;
     const moved = Math.hypot(e.clientX - clickStartX, e.clientY - clickStartY);
     const elapsed = performance.now() - clickStartT;
-    if (moved < 6 && elapsed < 400) tryFireMissile(e.clientX, e.clientY);
+    if (moved < 6 && elapsed < 400) queueClick(e.clientX, e.clientY);
     clickStartX = null;
   });
   window.addEventListener("mousemove", (e) => {
@@ -1116,35 +1240,13 @@ function loop() {
   target.z = Math.max(2, Math.min(GRID - 2, target.z));
 
   shake *= Math.exp(-4.5 * dt);
+  processClickQueue();
   updateMonsters(dt, now);
   checkZombieMerges();
   updateMissiles(dt);
   updateFx(dt);
-  updateTerrainRegen(dt, now);
   updateCamera();
   renderer.render(scene, camera);
-}
-
-// Craters slowly regrow (and their char marks fade) once a patch of terrain
-// has gone quiet for a while — nudges heights back toward the original
-// heightmap a little at a time, only rebuilding the meshes when something changed.
-function updateTerrainRegen(dt, now) {
-  if (!currentHeights || now - lastExplosionTime < REGEN_DELAY) return;
-  regenTimer += dt;
-  if (regenTimer < REGEN_INTERVAL) return;
-  regenTimer = 0;
-
-  let changed = false;
-  for (let i = 0; i < currentHeights.length; i++) {
-    if (currentHeights[i] < originalHeights[i]) {
-      currentHeights[i]++;
-      changed = true;
-    } else if (scorched[i]) {
-      scorched[i] = 0;
-      changed = true;
-    }
-  }
-  if (changed) rebuildBlockMeshes();
 }
 
 init();
