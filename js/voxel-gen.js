@@ -419,7 +419,7 @@ function fireZombieProjectile(shooter, target) {
     // updateZombieProjectiles.
     dps: dpsFor(level),
     interval: attackInterval(level),
-    speed: 7,
+    speed: 40, // super fast — reads as a shot, not a lobbed balloon
   });
 }
 
