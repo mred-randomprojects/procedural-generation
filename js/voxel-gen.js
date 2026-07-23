@@ -1261,7 +1261,7 @@ function init() {
         const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
         const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
         target.addScaledVector(right, -dxPix * scale);
-        target.addScaledVector(fwd, dyPix * scale);
+        target.addScaledVector(fwd, -dyPix * scale);
         target.x = Math.max(2, Math.min(GRID - 2, target.x));
         target.z = Math.max(2, Math.min(GRID - 2, target.z));
       } else {
