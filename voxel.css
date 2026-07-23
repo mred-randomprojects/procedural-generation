@@ -66,6 +66,23 @@ html, body {
 }
 #vx-new:hover { filter: brightness(1.2); }
 
+#vx-locate-elite {
+  background: #1d2833;
+  color: #e6ebf1;
+  border: 1px solid #33475c;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  width: 100%;
+}
+#vx-locate-elite:hover { filter: brightness(1.2); }
+#vx-locate-elite.active {
+  background: #4a1712;
+  border-color: #ff5a3c;
+  color: #ffcbb8;
+}
+
 #vx-biome {
   width: 100%;
   background: rgba(16, 21, 27, 0.8);

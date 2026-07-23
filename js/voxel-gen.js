@@ -76,7 +76,7 @@ const DEPTH_SPARE = 5;
 // player kills (net +1 per kill, since 1 dies and 2 spawn), never by zombies
 // eating each other.
 const MONSTER_COUNT = 9;
-const MERGE_DIST = 0.85;
+const EAT_DIST = 0.85; // how close two zombies must be to fight (see updateZombieCombat)
 const STARTING_MAX_BLAST = 3;
 // Cumulative XP needed to unlock each bigger blast radius, up through 8.
 const BLAST_UNLOCK_XP = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
@@ -206,13 +206,13 @@ function spawnMonsters(biome, heights, seed) {
     monsters.push({
       rig, mats, x, z,
       angle: rand() * Math.PI * 2,
-      speed: 1.0 + rand() * 1.0,
+      speed: stackSpeed(1) + rand() * 0.2, // small jitter only — level 2+ must always outrun a fresh level 1
       timer: rand() * 2,
       phase: rand() * Math.PI * 2,
       walkPhase: rand() * Math.PI * 2,
-      hp: 1, stackLevel: 1, eatProgress: 0, eatPulse: 0,
+      hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0,
       ...initVerticalState(x, z),
-      ...createMonsterUi(1),
+      ...createMonsterUi(),
     });
   }
   killCount = 0;
@@ -242,18 +242,23 @@ function spawnRandomZombie() {
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
-    hp: 1, stackLevel: 1, eatProgress: 0, eatPulse: 0,
+    hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0,
     ...initVerticalState(x, z),
-    ...createMonsterUi(1),
+    ...createMonsterUi(),
   });
   updateZombieBoard();
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
 // No cap, deliberately — a high-level zombie is now hard-won (see
-// eatsNeededForLevel), so it should feel dangerous: faster with every level,
-// forever.
-function stackSpeed(level) { return 1.0 + (level - 1) * 0.35; }
+// eatsNeededForLevel), so it should feel dangerous and get genuinely absurd:
+// level 1 is baseline speed, level 2 jumps to 1.7x, and every level after
+// that multiplies by another 1.5x — compounding, forever, so a sufficiently
+// fed zombie eventually becomes a blur.
+function stackSpeed(level) {
+  if (level <= 1) return 1;
+  return 1.7 * Math.pow(1.5, level - 2);
+}
 // Odd numbers: 1, 3, 5, 7, ... — how many zombies a zombie at this level must
 // eat to advance to the next level. Escalates faster than a flat rate so
 // early levels come quickly but high levels are a real achievement.
@@ -266,16 +271,8 @@ const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
 // to how tall that particular stack level actually renders.
 function hpBarOffset(level) { return 1.95 * stackScale(level) + 0.35; }
 
-// Aura color ramps from warm amber (just leveled up) to pure red as the
-// stack gets more dangerous — a quick "how dangerous is this" read.
-function auraColor(level) {
-  const t = Math.min(1, (level - 2) / 8);
-  const hue = 30 * (1 - t); // 30° amber → 0° red
-  return new THREE.Color().setHSL(hue / 360, 0.85, 0.5 - t * 0.1);
-}
-
 // Soft white radial-gradient texture, built once and shared (tinted per
-// instance via SpriteMaterial.color) by every zombie's aura glow.
+// instance via SpriteMaterial.color) by the health bar and elite-marker glow.
 function buildGlowTexture() {
   const size = 128;
   const canvas = document.createElement("canvas");
@@ -293,9 +290,12 @@ function buildGlowTexture() {
 }
 
 // Health bar (background + fill, both anchored left via Sprite.center so the
-// fill drains correctly regardless of camera angle) plus a soft glow aura for
-// stacked zombies. All added to monsterUiGroup so world-reset cleanup is free.
-function createMonsterUi(level) {
+// fill drains correctly regardless of camera angle). All added to
+// monsterUiGroup so world-reset cleanup is free. (Every zombie's stack level
+// is now called out only on demand — see the "Locate strongest" elite-marker
+// pool further down — not with an always-on per-zombie glow, which got
+// unreadable once a few dozen zombies were all wearing one at once.)
+function createMonsterUi() {
   const bgMat = new THREE.SpriteMaterial({ color: 0x120a08, transparent: true, opacity: 0.75, depthTest: false });
   const fillMat = new THREE.SpriteMaterial({ color: 0x4fd68a, transparent: true, opacity: 0.95, depthTest: false });
   const healthBg = new THREE.Sprite(bgMat);
@@ -308,35 +308,54 @@ function createMonsterUi(level) {
   healthFill.renderOrder = 998;
   monsterUiGroup.add(healthBg, healthFill);
 
-  const auraMat = new THREE.SpriteMaterial({
-    map: glowTex, color: auraColor(level), transparent: true, opacity: 0,
-    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
-  });
-  const aura = new THREE.Sprite(auraMat);
-  aura.renderOrder = 996;
-  aura.visible = level >= 2;
-  monsterUiGroup.add(aura);
-
-  return { healthBg, healthFill, aura };
+  return { healthBg, healthFill };
 }
 
 // Removes one zombie's UI sprites — never disposes .geometry (Sprites share a
-// module-level singleton) or the shared aura glow texture, only the
-// per-instance materials.
+// module-level singleton), only the per-instance materials.
 function disposeMonsterUi(m) {
-  monsterUiGroup.remove(m.healthBg, m.healthFill, m.aura);
+  monsterUiGroup.remove(m.healthBg, m.healthFill);
   m.healthBg.material.dispose();
   m.healthFill.material.dispose();
-  m.aura.material.dispose();
 }
 
-// Zombies of the SAME level that wander into each other fight — a coin flip
-// picks the winner, which eats the loser. The loser is killed outright and
-// immediately replaced by a fresh level-1 zombie elsewhere on the map, so
-// zombie-on-zombie combat never shrinks the total population: only a player
-// blast kill (see killMonstersNear, which spawns 2 replacements) changes the
-// total count. The winner racks up eaten kills and levels up once it clears
-// eatsNeededForLevel(level) — no ceiling, a zombie can keep eating forever.
+// Any two zombies that wander close enough fight it out — no same-level
+// restriction. Each deals damage-per-second equal to its OWN level (so a
+// level 8 hits three times as hard as a level... no, exactly 8x as hard as a
+// level 1) to the other, simultaneously, every frame they stay in range. A
+// fresh, undamaged fight between equal levels is always an exact tie (same hp
+// pool, same dps, both hit 0 at the same instant) — broken by a coin flip, so
+// same-level fights still feel like a toss-up. But hp persists between
+// fights (and blast damage!), so a higher-level zombie that already took a
+// beating CAN lose to a weaker one that catches it while it's hurt — the
+// nominal level is a strong favorite, not a guarantee.
+function updateZombieCombat(dt) {
+  for (let i = 0; i < monsters.length; i++) {
+    const a = monsters[i];
+    for (let j = i + 1; j < monsters.length; j++) {
+      const b = monsters[j];
+      if (Math.hypot(a.x - b.x, a.z - b.z) >= EAT_DIST) continue;
+      a.hp -= b.stackLevel * dt;
+      b.hp -= a.stackLevel * dt;
+      const aDead = a.hp <= 0, bDead = b.hp <= 0;
+      if (!aDead && !bDead) continue;
+      // Mutual kill (rare — needs equal hp/dps on both sides): coin flip who
+      // narrowly comes out on top, since our model needs one survivor to eat.
+      const bWins = aDead && (bDead ? Math.random() < 0.5 : true);
+      eatZombie(bWins ? b : a, bWins ? a : b);
+      return; // arrays mutated — resume scanning next frame
+    }
+  }
+}
+
+// The loser is killed outright and immediately replaced by a fresh level-1
+// zombie elsewhere on the map, so zombie-on-zombie combat never shrinks the
+// total population: only a player blast kill (see killMonstersNear, which
+// spawns 2 replacements) changes the total count. The winner earns XP equal
+// to the LOSER'S level — eating something tougher is worth proportionally
+// more, same idea as a real RPG — and can level up multiple times off one
+// huge kill. No ceiling: left alone long enough, constantly-replenished weak
+// zombies feed a slow "survival of the fittest" climb toward one monster.
 function eatZombie(winner, loser) {
   const lx = loser.x, lz = loser.z;
   monsterGroup.remove(loser.rig.root);
@@ -354,32 +373,16 @@ function eatZombie(winner, loser) {
   winner.x += (lx - winner.x) * 0.5;
   winner.z += (lz - winner.z) * 0.5;
   winner.eatPulse = 0.3;
+  winner.hp = Math.max(winner.hp, 1); // survives even a near-mutual kill
 
-  winner.eatProgress++;
-  if (winner.eatProgress >= eatsNeededForLevel(winner.stackLevel)) {
-    winner.eatProgress = 0;
+  winner.eatXp += loser.stackLevel;
+  while (winner.eatXp >= eatsNeededForLevel(winner.stackLevel)) {
+    winner.eatXp -= eatsNeededForLevel(winner.stackLevel);
     winner.stackLevel++;
-    winner.hp = winner.stackLevel;
+    winner.hp = winner.stackLevel; // leveling up fully heals
     winner.speed = stackSpeed(winner.stackLevel) + Math.random() * 0.2;
-    winner.aura.visible = winner.stackLevel >= 2;
-    winner.aura.material.color.copy(auraColor(winner.stackLevel));
   }
   updateZombieBoard();
-}
-
-function checkZombieEats() {
-  for (let i = 0; i < monsters.length; i++) {
-    const a = monsters[i];
-    for (let j = i + 1; j < monsters.length; j++) {
-      const b = monsters[j];
-      if (a.stackLevel !== b.stackLevel) continue;
-      if (Math.hypot(a.x - b.x, a.z - b.z) < MERGE_DIST) {
-        const aWins = Math.random() < 0.5;
-        eatZombie(aWins ? a : b, aWins ? b : a);
-        return; // arrays mutated — resume scanning next frame
-      }
-    }
-  }
 }
 
 function updateScoreHud() {
@@ -516,16 +519,8 @@ function updateMonsters(dt, now) {
       m.healthFill.scale.set(HP_BAR_INNER_W * ratio, HP_BAR_INNER_H, 1);
       m.healthFill.material.color.setHex(ratio > 0.5 ? 0x4fd68a : ratio > 0.25 ? 0xffcf5a : 0xff5a4a);
     }
-
-    // Aura — a gently pulsing glow for any zombie that has merged at least once.
-    if (m.stackLevel >= 2) {
-      const auraY = m.visualY + hpBarOffset(m.stackLevel) * 0.55;
-      m.aura.position.set(m.x, auraY, m.z);
-      const pulse = 0.85 + 0.15 * Math.sin(now * 2.6 + m.phase);
-      m.aura.scale.setScalar(stackScale(m.stackLevel) * 1.8 * pulse);
-      m.aura.material.opacity = 0.35 + 0.15 * Math.sin(now * 2.6 + m.phase);
-    }
   }
+  updateEliteMarkers(now);
 }
 
 function killMonstersNear(bx, bz, r) {
@@ -925,6 +920,76 @@ function hideAllHighlights() {
   for (const m of highlightPool) m.visible = false;
 }
 
+// "Locate strongest" — toggled from the HUD button instead of an always-on
+// per-zombie aura. An always-on glow on every leveled-up zombie became
+// useless once a few dozen were wandering around all wearing one at once;
+// this instead calls out ONLY the single current highest level (ties
+// included) on demand, with a rotating ring at its feet plus a tall beacon
+// so it's spottable over trees/hills/other zombies from across the map.
+//
+// Added to `root`, NOT `monsterUiGroup` — that group is wiped by clearGroup()
+// on every world regen (see spawnMonsters), which would leave this pool
+// holding disposed objects. Like `highlightPool` above, these are
+// regen-independent: just repositioned onto whichever zombie is currently
+// the elite, every frame.
+let locateEliteOn = false;
+let eliteRingGeo = null;
+const eliteMarkerPool = []; // { ring: Mesh, beam: Sprite }
+
+function ensureEliteMarker(i) {
+  while (eliteMarkerPool.length <= i) {
+    const ring = new THREE.Mesh(eliteRingGeo, new THREE.MeshBasicMaterial({
+      color: 0xff2a1a, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+    }));
+    ring.renderOrder = 995;
+    ring.rotation.x = -Math.PI / 2;
+    ring.visible = false;
+    root.add(ring);
+
+    const beam = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: 0xff3a20, transparent: true, opacity: 0.8,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+    }));
+    beam.renderOrder = 994;
+    beam.visible = false;
+    root.add(beam);
+
+    eliteMarkerPool.push({ ring, beam });
+  }
+  return eliteMarkerPool[i];
+}
+
+function hideAllEliteMarkers() {
+  for (const p of eliteMarkerPool) { p.ring.visible = false; p.beam.visible = false; }
+}
+
+function updateEliteMarkers(now) {
+  if (!locateEliteOn || monsters.length === 0) { hideAllEliteMarkers(); return; }
+  let maxLevel = 1;
+  for (const m of monsters) if (m.stackLevel > maxLevel) maxLevel = m.stackLevel;
+  if (maxLevel <= 1) { hideAllEliteMarkers(); return; } // nobody stands out yet
+  let count = 0;
+  for (const m of monsters) {
+    if (m.stackLevel !== maxLevel) continue;
+    const { ring, beam } = ensureEliteMarker(count++);
+    ring.position.set(m.x, m.visualY + 0.05, m.z);
+    ring.rotation.z = now * 1.8;
+    const pulse = 1 + 0.15 * Math.sin(now * 3 + m.phase);
+    ring.scale.setScalar(stackScale(m.stackLevel) * pulse);
+    ring.visible = true;
+
+    beam.position.set(m.x, m.visualY + hpBarOffset(m.stackLevel) + 1.6, m.z);
+    beam.scale.set(0.7, 3.2, 1);
+    beam.material.opacity = 0.65 + 0.15 * Math.sin(now * 3 + m.phase);
+    beam.visible = true;
+  }
+  for (let i = count; i < eliteMarkerPool.length; i++) {
+    eliteMarkerPool[i].ring.visible = false;
+    eliteMarkerPool[i].beam.visible = false;
+  }
+}
+
 function updateAimIndicator() {
   if (hoverClientX === null || !blockMeshes) { hideAllHighlights(); return; }
   const point = raycastGround(hoverClientX, hoverClientY);
@@ -1318,6 +1383,8 @@ function init() {
     color: 0xff2e1c, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
   });
 
+  eliteRingGeo = new THREE.RingGeometry(0.55, 0.78, 28);
+
   camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 300);
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
@@ -1393,6 +1460,13 @@ function init() {
   seedInput.addEventListener("change", () => regenerate(false));
   biomeSelect.addEventListener("change", () => regenerate(false));
 
+  const locateBtn = document.getElementById("vx-locate-elite");
+  locateBtn.addEventListener("click", () => {
+    locateEliteOn = !locateEliteOn;
+    locateBtn.classList.toggle("active", locateEliteOn);
+    if (!locateEliteOn) hideAllEliteMarkers();
+  });
+
   regenerate(false);
   requestAnimationFrame(loop);
 }
@@ -1428,7 +1502,7 @@ function loop() {
   shake *= Math.exp(-4.5 * dt);
   processClickQueue();
   updateMonsters(dt, now);
-  checkZombieEats();
+  updateZombieCombat(dt);
   updateMissiles(dt);
   updateFx(dt);
   updateCamera();
