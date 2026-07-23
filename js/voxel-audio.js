@@ -3,11 +3,29 @@
 // resumed lazily the first time a sound is actually requested.
 
 let ctx = null;
+let masterBus = null;
+let masterVolume = 1;
 
 function getCtx() {
   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
   if (ctx.state === "suspended") ctx.resume();
   return ctx;
+}
+
+// Every sound routes through this shared bus so the settings volume slider
+// scales the whole mix at once.
+function getBus(c) {
+  if (!masterBus) {
+    masterBus = c.createGain();
+    masterBus.gain.value = masterVolume;
+    masterBus.connect(c.destination);
+  }
+  return masterBus;
+}
+
+export function setMasterVolume(v) {
+  masterVolume = Math.max(0, Math.min(1, v));
+  if (masterBus) masterBus.gain.value = masterVolume;
 }
 
 function noiseBuffer(c, duration) {
@@ -124,7 +142,7 @@ export function playExplosion(radius = 3) {
   const scale = Math.min(4.0, 0.9 + radius * 0.16);
   const master = c.createGain();
   master.gain.value = Math.min(2.6, 1.05 * scale);
-  master.connect(c.destination);
+  master.connect(getBus(c));
 
   // fat sub-bass thump: two detuned sines for body, no distortion (clean = no shimmer)
   for (const detune of [0, -6]) {
@@ -155,7 +173,7 @@ export function playHeartHit() {
   const t0 = c.currentTime;
   const master = c.createGain();
   master.gain.value = 0.8;
-  master.connect(c.destination);
+  master.connect(getBus(c));
 
   const thump = c.createOscillator();
   thump.type = "sine";
@@ -182,7 +200,7 @@ export function playWaveStart() {
   const t0 = c.currentTime;
   const master = c.createGain();
   master.gain.value = 0.9;
-  master.connect(c.destination);
+  master.connect(getBus(c));
 
   for (const [start, from, to] of [[0, 196, 262], [0.16, 262, 392]]) {
     const horn = c.createOscillator();
@@ -206,7 +224,7 @@ export function playGameOver() {
   const t0 = c.currentTime;
   const master = c.createGain();
   master.gain.value = 1.1;
-  master.connect(c.destination);
+  master.connect(getBus(c));
 
   const notes = [392, 311, 233];
   notes.forEach((freq, i) => {
@@ -228,7 +246,7 @@ export function playPurchase() {
   const t0 = c.currentTime;
   const master = c.createGain();
   master.gain.value = 0.9;
-  master.connect(c.destination);
+  master.connect(getBus(c));
 
   for (const [start, freq] of [[0, 880], [0.09, 1318]]) {
     const osc = c.createOscillator();
@@ -248,7 +266,7 @@ export function playTurretShot() {
   const t0 = c.currentTime;
   const master = c.createGain();
   master.gain.value = 0.32;
-  master.connect(c.destination);
+  master.connect(getBus(c));
 
   const zap = c.createOscillator();
   zap.type = "square";
@@ -268,7 +286,7 @@ export function playZombieKill(count = 1) {
   const boost = Math.min(1.5, 1 + (count - 1) * 0.14);
   const master = c.createGain();
   master.gain.value = Math.min(2.2, 1.5 * boost);
-  master.connect(c.destination);
+  master.connect(getBus(c));
 
   // low impact thud so the kill has real weight, not just a splat
   const thud = c.createOscillator();

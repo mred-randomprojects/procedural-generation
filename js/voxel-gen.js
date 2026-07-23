@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { buildBlockMaterials, disposeBlockMaterials, buildZombieMaterials, disposeZombieMaterials } from "./voxel-textures.js";
 import {
   playExplosion, playZombieKill, playHeartHit, playWaveStart,
-  playGameOver, playPurchase, playTurretShot,
+  playGameOver, playPurchase, playTurretShot, setMasterVolume,
 } from "./voxel-audio.js";
 
 /* ---------- Biome presets ---------- */
@@ -134,8 +134,63 @@ function saveLegacy() {
   try { localStorage.setItem("vx-legacy", JSON.stringify(legacy)); } catch { /* private mode */ }
 }
 function legacyCost(rank) { return 3 + rank * 2; } // shards; grows per rank
-function heartMaxHp() { return 100 + legacy.heartRank * 20; }
 loadLegacy();
+
+/* ---------- difficulty, settings, achievements ---------- */
+
+// Difficulty scales the Heart's durability and how fast pressure arrives.
+// Chosen on the title screen; persists across sessions.
+const DIFFICULTIES = {
+  easy: { label: "🌱 Easy", hp: 1.5, wave: 1.35, trickle: 1.4 },
+  normal: { label: "⚔️ Normal", hp: 1, wave: 1, trickle: 1 },
+  hard: { label: "💀 Hard", hp: 0.75, wave: 0.75, trickle: 0.75 },
+};
+let difficulty = "normal";
+
+function heartMaxHp() {
+  return Math.round((100 + legacy.heartRank * 20) * DIFFICULTIES[difficulty].hp);
+}
+
+const settings = { volume: 1, shake: true };
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("vx-settings") || "{}");
+    if (typeof saved.volume === "number") settings.volume = saved.volume;
+    if (typeof saved.shake === "boolean") settings.shake = saved.shake;
+    if (DIFFICULTIES[saved.difficulty]) difficulty = saved.difficulty;
+  } catch { /* defaults */ }
+  setMasterVolume(settings.volume);
+}
+function saveSettings() {
+  try {
+    localStorage.setItem("vx-settings", JSON.stringify({ ...settings, difficulty }));
+  } catch { /* private mode */ }
+}
+loadSettings();
+
+// Lightweight local achievements: unlocked once, persisted, announced with a
+// toast. Checked at the moments their stats change, not polled.
+const ACHIEVEMENTS = {
+  "first-blood": "🏆 First Blood — destroy your first zombie",
+  "exterminator": "🏆 Exterminator — 100 kills in one run",
+  "wave-5": "🏆 Holding On — survive to wave 5",
+  "wave-10": "🏆 Unbreakable — survive to wave 10",
+  "evolved-5": "🏆 It's Growing — witness a level 5 zombie",
+  "evolved-10": "🏆 Apex Predator — witness a level 10 zombie",
+  "engineer": "🏆 Engineer — 3 turrets standing at once",
+  "rich": "🏆 War Chest — hold 500 energy",
+};
+let unlockedAchievements = {};
+try { unlockedAchievements = JSON.parse(localStorage.getItem("vx-achievements") || "{}"); } catch { /* none */ }
+
+function unlockAchievement(key) {
+  if (unlockedAchievements[key]) return;
+  unlockedAchievements[key] = true;
+  try { localStorage.setItem("vx-achievements", JSON.stringify(unlockedAchievements)); } catch { /* oh well */ }
+  showToast(ACHIEVEMENTS[key]);
+  playPurchase(); // reuse the reward chime
+}
 let heart = null; // { isHeart, x, z, y, visualY, stackLevel, hp, group, crystal, glow, light }
 let gameState = "playing"; // "playing" | "paused" | "over"
 let waveNumber = 0, waveTimer = 18, trickleTimer = 5;
@@ -442,16 +497,18 @@ function updateWaves(dt) {
   waveTimer -= dt;
   if (waveTimer <= 0) {
     waveNumber++;
-    waveTimer = Math.max(10, 22 - waveNumber * 0.5);
+    waveTimer = Math.max(10, 22 - waveNumber * 0.5) * DIFFICULTIES[difficulty].wave;
     const count = 2 + waveNumber;
     for (let i = 0; i < count; i++) spawnRandomZombie(true);
     playWaveStart();
     showToast(`🌊 Wave ${waveNumber} — ${count} invaders!`);
+    if (waveNumber >= 5) unlockAchievement("wave-5");
+    if (waveNumber >= 10) unlockAchievement("wave-10");
     updateHeartHud();
   }
   trickleTimer -= dt;
   if (trickleTimer <= 0) {
-    trickleTimer = Math.max(1.5, 5 - waveNumber * 0.15);
+    trickleTimer = Math.max(1.5, 5 - waveNumber * 0.15) * DIFFICULTIES[difficulty].trickle;
     spawnRandomZombie(true);
   }
 }
@@ -541,8 +598,8 @@ function renderLegacyShop() {
 function resetRun() {
   gameState = "playing";
   waveNumber = 0;
-  waveTimer = 18;
-  trickleTimer = 5;
+  waveTimer = 18 * DIFFICULTIES[difficulty].wave;
+  trickleTimer = 5 * DIFFICULTIES[difficulty].trickle;
   runStartTime = performance.now() / 1000;
   buildHeart(false);
   clearTurrets();
@@ -587,6 +644,7 @@ function buyTurret() {
   energy -= turretCost;
   turretCost = Math.round(turretCost * 1.6);
   buildTurret();
+  if (turrets.length >= 3) unlockAchievement("engineer");
   playPurchase();
   updateScoreHud();
 }
@@ -716,6 +774,9 @@ function killZombieByPlayer(m) {
   const earned = m.stackLevel * 10;
   xp += earned;
   energy += earned;
+  unlockAchievement("first-blood");
+  if (killCount >= 100) unlockAchievement("exterminator");
+  if (energy >= 500) unlockAchievement("rich");
   updateScoreHud();
   checkBlastUnlocks();
   let toSpawn = spawnsPerKill;
@@ -965,6 +1026,8 @@ function resolveZombieKill(killer, loser) {
     killer.hp = maxHpFor(killer.stackLevel); // leveling up fully heals
     killer.speed = stackSpeed(killer.stackLevel) + Math.random() * 0.2;
   }
+  if (killer.stackLevel >= 5) unlockAchievement("evolved-5");
+  if (killer.stackLevel >= 10) unlockAchievement("evolved-10");
   updateZombieBoard();
 }
 
@@ -1151,6 +1214,9 @@ function killMonstersNear(bx, bz, r) {
     killCount += kills;
     xp += earned;
     energy += earned; // spendable twin of the XP payout — see the energy declaration
+    unlockAchievement("first-blood");
+    if (killCount >= 100) unlockAchievement("exterminator");
+    if (energy >= 500) unlockAchievement("rich");
     updateScoreHud();
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
@@ -1971,9 +2037,10 @@ function updateCamera() {
   const x = target.x + dist * Math.sin(phi) * Math.cos(theta);
   const y = target.y + dist * Math.cos(phi);
   const z = target.z + dist * Math.sin(phi) * Math.sin(theta);
-  const jx = (Math.random() - 0.5) * shake;
-  const jy = (Math.random() - 0.5) * shake;
-  const jz = (Math.random() - 0.5) * shake;
+  const s = settings.shake ? shake : 0; // screen-shake can be disabled in settings
+  const jx = (Math.random() - 0.5) * s;
+  const jy = (Math.random() - 0.5) * s;
+  const jz = (Math.random() - 0.5) * s;
   camera.position.set(x + jx, y + jy, z + jz);
   camera.lookAt(target);
 }
@@ -2162,7 +2229,33 @@ function init() {
   document.getElementById("vx-shop-repair").addEventListener("click", buyRepair);
   document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
 
+  // Title screen: play, difficulty, settings — controls seeded from the
+  // persisted settings so the menu reflects what's actually active.
+  document.getElementById("vx-title-play").addEventListener("click", startFromTitle);
+  for (const btn of document.querySelectorAll(".diff-btn")) {
+    btn.classList.toggle("active", btn.dataset.diff === difficulty);
+    btn.addEventListener("click", () => {
+      difficulty = btn.dataset.diff;
+      for (const b of document.querySelectorAll(".diff-btn")) b.classList.toggle("active", b === btn);
+      saveSettings();
+    });
+  }
+  const volumeEl = document.getElementById("vx-volume");
+  volumeEl.value = String(settings.volume);
+  volumeEl.addEventListener("input", () => {
+    settings.volume = Number(volumeEl.value);
+    setMasterVolume(settings.volume);
+    saveSettings();
+  });
+  const shakeEl = document.getElementById("vx-shake-toggle");
+  shakeEl.checked = settings.shake;
+  shakeEl.addEventListener("change", () => {
+    settings.shake = shakeEl.checked;
+    saveSettings();
+  });
+
   regenerate(false);
+  showTitle(); // first visit lands on the menu, world idling behind it
   requestAnimationFrame(loop);
 }
 
@@ -2217,9 +2310,33 @@ function loop() {
   renderer.render(scene, camera);
 }
 
+// The pre-run menu: world renders and idles behind it, sim frozen until
+// Play. Doubles as the settings + difficulty screen.
+function showTitle() {
+  gameState = "menu";
+  const meta = document.getElementById("vx-title-meta");
+  if (meta) {
+    let best = 0;
+    try { best = Number(localStorage.getItem("vx-best-score") || 0); } catch { /* fresh */ }
+    const unlocked = Object.keys(unlockedAchievements).length;
+    meta.innerHTML =
+      `Best score: <b>${best}</b> · Achievements: <b>${unlocked}/${Object.keys(ACHIEVEMENTS).length}</b>` +
+      ` · Legacy shards: <b>${legacy.shards}</b>`;
+  }
+  document.getElementById("vx-title")?.classList.add("show");
+}
+
+function startFromTitle() {
+  document.getElementById("vx-title")?.classList.remove("show");
+  gameState = "playing";
+  // Menu time doesn't count as survival, and difficulty may have changed —
+  // rebuild the Heart at the (possibly rescaled) full HP and restart clocks.
+  resetRun();
+}
+
 let pauseStartedAt = 0;
 function togglePause() {
-  if (gameState === "over") return;
+  if (gameState === "over" || gameState === "menu") return;
   const now = performance.now() / 1000;
   if (gameState === "paused") {
     gameState = "playing";

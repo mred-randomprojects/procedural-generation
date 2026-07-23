@@ -1,0 +1,31 @@
+{
+  "name": "heartfall",
+  "productName": "Heartfall",
+  "version": "0.1.0",
+  "description": "Hold the Heart against the evolving voxel horde.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "package:mac": "electron-builder --mac",
+    "package:win": "electron-builder --win",
+    "package:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.mredrandomprojects.heartfall",
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": { "category": "public.app-category.games" },
+    "win": { "target": "nsis" },
+    "linux": { "target": "AppImage", "category": "Game" }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
