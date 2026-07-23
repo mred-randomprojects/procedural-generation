@@ -266,12 +266,12 @@ const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
 // to how tall that particular stack level actually renders.
 function hpBarOffset(level) { return 1.95 * stackScale(level) + 0.35; }
 
-// Aura color ramps from warm orange (just-merged) through magenta to a hot
-// pink/red as the stack gets absurd — a quick "how dangerous is this" read.
+// Aura color ramps from warm amber (just leveled up) to pure red as the
+// stack gets more dangerous — a quick "how dangerous is this" read.
 function auraColor(level) {
   const t = Math.min(1, (level - 2) / 8);
-  const hue = (30 - t * 90 + 360) % 360;
-  return new THREE.Color().setHSL(hue / 360, 0.85, 0.55);
+  const hue = 30 * (1 - t); // 30° amber → 0° red
+  return new THREE.Color().setHSL(hue / 360, 0.85, 0.5 - t * 0.1);
 }
 
 // Soft white radial-gradient texture, built once and shared (tinted per
