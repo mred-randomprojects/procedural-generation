@@ -273,15 +273,11 @@ function processPendingSpawns(now) {
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
-// No cap, deliberately — a high-level zombie is now hard-won (see
-// eatsNeededForLevel), so it should feel dangerous and get genuinely absurd:
-// level 1 is baseline speed, level 2 jumps to 1.7x, and every level after
-// that multiplies by another 1.5x — compounding, forever, so a sufficiently
-// fed zombie eventually becomes a blur.
-function stackSpeed(level) {
-  if (level <= 1) return 1;
-  return 1.7 * Math.pow(1.5, level - 2);
-}
+// No cap, deliberately — a high-level zombie is hard-won (see
+// eatsNeededForLevel) so it should keep getting faster forever, but linearly:
+// x1 at level 1, +0.3 per level after (the earlier x1.5-compounding curve
+// made high levels comically untrackable).
+function stackSpeed(level) { return 1 + (level - 1) * 0.3; }
 // Odd numbers: 1, 3, 5, 7, ... — how many zombies a zombie at this level must
 // eat to advance to the next level. Escalates faster than a flat rate so
 // early levels come quickly but high levels are a real achievement.
