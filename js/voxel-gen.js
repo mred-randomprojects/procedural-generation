@@ -4,46 +4,51 @@ import { playExplosion, playZombieKill } from "./voxel-audio.js";
 
 /* ---------- Biome presets ---------- */
 
+// Rock colors deliberately avoid true gray — a bare, low-saturation gray is
+// exactly what reads as flat/bland "gray blocks" once tinted by ambient light
+// and viewed from a few meters out. Every biome's shallow rock instead leans
+// warm or cool toward its theme (see paintRock in voxel-textures.js for the
+// pebble/mica detail layered on top of these).
 const BIOMES = {
   plains: {
     scale: 1.6, octaves: 4, heightMul: 6, baseHeight: 5,
     seaLevel: -1, treeDensity: 0.02,
-    top: 0x6cbf4f, sub: 0x8a5a34, rock: 0x8a8a8a,
+    top: 0x6cbf4f, sub: 0x8a5a34, rock: 0x8c7d64,
     sand: 0xdccb7a, snowLine: 999, snow: 0xffffff,
     water: 0x3a7bd5, sky: [0x9fd6ff, 0xd8f0ff],
   },
   desert: {
     scale: 2.0, octaves: 4, heightMul: 4, baseHeight: 4,
     seaLevel: -3, treeDensity: 0.0,
-    top: 0xe3c877, sub: 0xcaa85c, rock: 0x9c8452,
+    top: 0xe3c877, sub: 0xcaa85c, rock: 0xa8875a,
     sand: 0xe3c877, snowLine: 999, snow: 0xffffff,
     water: 0x2f7fb0, sky: [0xffd9a0, 0xfff2d8],
   },
   snowy: {
     scale: 1.8, octaves: 4, heightMul: 7, baseHeight: 6,
     seaLevel: -1, treeDensity: 0.012,
-    top: 0xf4f8fb, sub: 0x8a5a34, rock: 0x8f97a0,
+    top: 0xf4f8fb, sub: 0x8a5a34, rock: 0x8497a8,
     sand: 0xe7edf2, snowLine: 2, snow: 0xffffff,
     water: 0x3f6f9c, sky: [0xbcd7e8, 0xeaf4fb],
   },
   islands: {
     scale: 1.5, octaves: 5, heightMul: 8, baseHeight: 2,
     seaLevel: 1, treeDensity: 0.03,
-    top: 0x5fc25a, sub: 0x8a6a34, rock: 0x7f7f7f,
+    top: 0x5fc25a, sub: 0x8a6a34, rock: 0x8a7361,
     sand: 0xe8d692, snowLine: 999, snow: 0xffffff,
     water: 0x2489c9, sky: [0x7fd6ff, 0xd0f4ff],
   },
   mountains: {
     scale: 1.6, octaves: 5, heightMul: 20, baseHeight: 5,
     seaLevel: -2, treeDensity: 0.015,
-    top: 0x5c9a4b, sub: 0x7a5a3a, rock: 0x767b80,
+    top: 0x5c9a4b, sub: 0x7a5a3a, rock: 0x6d7a8c,
     sand: 0xd4c483, snowLine: 9, snow: 0xffffff,
     water: 0x2f6fa8, sky: [0x8fb8e0, 0xdcecfb],
   },
   swamp: {
     scale: 3.4, octaves: 3, heightMul: 4, baseHeight: 3,
     seaLevel: 0, treeDensity: 0.025,
-    top: 0x5a7a3f, sub: 0x4a3c28, rock: 0x6f6f60,
+    top: 0x5a7a3f, sub: 0x4a3c28, rock: 0x64684a,
     sand: 0xa9a06a, snowLine: 999, snow: 0xffffff,
     water: 0x4a6b4a, sky: [0xaebfa0, 0xd8e2c8],
   },
@@ -65,9 +70,11 @@ const DEPTH_SPARE = 5;
 // it is not a ceiling. Do not add a cap here (or a general population cap
 // anywhere else in this file) without explicit user direction; if a limit
 // starts to feel necessary for performance, raise it with the user rather
-// than silently capping. Zombies do consolidate via mergeZombies() when two
-// same-level stacks touch — that reduces the on-screen entity count as a
-// gameplay mechanic, but it is not a spawn limit and must not become one.
+// than silently capping. Same-level zombies that touch fight via eatZombie()
+// — the loser dies but is immediately replaced elsewhere (see spawnRandomZombie
+// in eatZombie), so this is population-neutral: total count is driven ONLY by
+// player kills (net +1 per kill, since 1 dies and 2 spawn), never by zombies
+// eating each other.
 const MONSTER_COUNT = 9;
 const MERGE_DIST = 0.85;
 const STARTING_MAX_BLAST = 3;
@@ -90,7 +97,8 @@ const keys = {};
 
 let monsterGroup, monsterUiGroup, glowTex, monsters = [];
 let treeGroup, treeList = [];
-let currentHeights = null, originalHeights = null, currentSeaLevel = -99, currentBiome = null, scorched = null;
+let currentHeights = null, originalHeights = null, currentSeaLevel = -99, currentBiome = null;
+let tintNoise = null; // smooth per-world noise field driving terrainTint below
 let damageAccum = null; // hit-points chipped into whatever block currently tops each column
 let currentSeed = "terra", monsterIdCounter = 0;
 let lastTime = 0;
@@ -108,6 +116,17 @@ function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
   const zi = Math.max(0, Math.min(GRID - 1, Math.round(z)));
   return currentHeights ? currentHeights[zi * GRID + xi] : 0;
+}
+
+// Whether (x,z) is a real, permanent body of water — judged from the PRISTINE
+// height, not the current (possibly dug) one. Blast craters carve indefinitely
+// deep with no floor, so a deep crater's current height easily drops below sea
+// level; checking currentHeights there would wrongly treat "a hole you blew in
+// the ground" as a lake and block zombies from ever walking into it.
+function isWaterAt(x, z) {
+  const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
+  const zi = Math.max(0, Math.min(GRID - 1, Math.round(z)));
+  return originalHeights ? originalHeights[zi * GRID + xi] <= currentSeaLevel : false;
 }
 
 // Vertical-movement state for a zombie: instead of snapping to the new block
@@ -191,7 +210,7 @@ function spawnMonsters(biome, heights, seed) {
       timer: rand() * 2,
       phase: rand() * Math.PI * 2,
       walkPhase: rand() * Math.PI * 2,
-      hp: 1, stackLevel: 1,
+      hp: 1, stackLevel: 1, eatProgress: 0, eatPulse: 0,
       ...initVerticalState(x, z),
       ...createMonsterUi(1),
     });
@@ -223,7 +242,7 @@ function spawnRandomZombie() {
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
-    hp: 1, stackLevel: 1,
+    hp: 1, stackLevel: 1, eatProgress: 0, eatPulse: 0,
     ...initVerticalState(x, z),
     ...createMonsterUi(1),
   });
@@ -231,7 +250,14 @@ function spawnRandomZombie() {
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
-function stackSpeed(level) { return Math.min(4.5, 1.0 + (level - 1) * 0.18); }
+// No cap, deliberately — a high-level zombie is now hard-won (see
+// eatsNeededForLevel), so it should feel dangerous: faster with every level,
+// forever.
+function stackSpeed(level) { return 1.0 + (level - 1) * 0.35; }
+// Odd numbers: 1, 3, 5, 7, ... — how many zombies a zombie at this level must
+// eat to advance to the next level. Escalates faster than a flat rate so
+// early levels come quickly but high levels are a real achievement.
+function eatsNeededForLevel(level) { return 2 * level - 1; }
 
 const HP_BAR_W = 0.9, HP_BAR_H = 0.13;
 const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
@@ -304,48 +330,52 @@ function disposeMonsterUi(m) {
   m.aura.material.dispose();
 }
 
-// Zombies of the SAME level that wander into each other fuse into one
-// zombie one level higher (1+1→2, 2+2→3, 3+3→4, ...), with no ceiling —
-// each level adds one required hit and visibly grows it further.
-function mergeZombies(a, b) {
-  const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
-  const level = a.stackLevel + 1;
-  monsterGroup.remove(a.rig.root, b.rig.root);
-  disposeZombieMaterials(a.mats);
-  disposeZombieMaterials(b.mats);
-  disposeMonsterUi(a);
-  disposeMonsterUi(b);
-  monsters.splice(monsters.indexOf(b), 1);
-  monsters.splice(monsters.indexOf(a), 1);
+// Zombies of the SAME level that wander into each other fight — a coin flip
+// picks the winner, which eats the loser. The loser is killed outright and
+// immediately replaced by a fresh level-1 zombie elsewhere on the map, so
+// zombie-on-zombie combat never shrinks the total population: only a player
+// blast kill (see killMonstersNear, which spawns 2 replacements) changes the
+// total count. The winner racks up eaten kills and levels up once it clears
+// eatsNeededForLevel(level) — no ceiling, a zombie can keep eating forever.
+function eatZombie(winner, loser) {
+  const lx = loser.x, lz = loser.z;
+  monsterGroup.remove(loser.rig.root);
+  disposeZombieMaterials(loser.mats);
+  disposeMonsterUi(loser);
+  monsters.splice(monsters.indexOf(loser), 1);
 
-  spawnMergeFx(mx, heightAt(mx, mz) + 1, mz);
+  spawnEatFx(lx, heightAt(lx, lz) + 1, lz);
+  spawnGibs(lx, heightAt(lx, lz) + 0.9, lz);
 
-  const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
-  const rig = createZombieMesh(mats);
-  rig.root.scale.setScalar(stackScale(level));
-  monsterGroup.add(rig.root);
-  monsters.push({
-    rig, mats, x: mx, z: mz,
-    angle: Math.random() * Math.PI * 2,
-    speed: stackSpeed(level) + Math.random() * 0.2,
-    timer: Math.random() * 2,
-    phase: Math.random() * Math.PI * 2,
-    walkPhase: Math.random() * Math.PI * 2,
-    hp: level, stackLevel: level,
-    ...initVerticalState(mx, mz),
-    ...createMonsterUi(level),
-  });
+  // Replace the loser 1-for-1 so this encounter is population-neutral.
+  spawnRandomZombie();
+
+  // A quick lunge toward the kill spot sells the "eating" motion.
+  winner.x += (lx - winner.x) * 0.5;
+  winner.z += (lz - winner.z) * 0.5;
+  winner.eatPulse = 0.3;
+
+  winner.eatProgress++;
+  if (winner.eatProgress >= eatsNeededForLevel(winner.stackLevel)) {
+    winner.eatProgress = 0;
+    winner.stackLevel++;
+    winner.hp = winner.stackLevel;
+    winner.speed = stackSpeed(winner.stackLevel) + Math.random() * 0.2;
+    winner.aura.visible = winner.stackLevel >= 2;
+    winner.aura.material.color.copy(auraColor(winner.stackLevel));
+  }
   updateZombieBoard();
 }
 
-function checkZombieMerges() {
+function checkZombieEats() {
   for (let i = 0; i < monsters.length; i++) {
     const a = monsters[i];
     for (let j = i + 1; j < monsters.length; j++) {
       const b = monsters[j];
       if (a.stackLevel !== b.stackLevel) continue;
       if (Math.hypot(a.x - b.x, a.z - b.z) < MERGE_DIST) {
-        mergeZombies(a, b);
+        const aWins = Math.random() < 0.5;
+        eatZombie(aWins ? a : b, aWins ? b : a);
         return; // arrays mutated — resume scanning next frame
       }
     }
@@ -420,16 +450,20 @@ function updateMonsters(dt, now) {
     const nx = m.x + Math.sin(m.angle) * m.speed * dt;
     const nz = m.z + Math.cos(m.angle) * m.speed * dt;
     const inBounds = nx > 2 && nx < GRID - 3 && nz > 2 && nz < GRID - 3;
-    const h = inBounds ? heightAt(nx, nz) : 0;
     let moving = false;
-    if (inBounds && h > currentSeaLevel && h < 99) {
+    // Zombies can walk anywhere regardless of elevation — no slope/height gate
+    // at all, only actual water (see isWaterAt) and the map edge stop them.
+    if (inBounds && !isWaterAt(nx, nz)) {
       m.x = nx; m.z = nz;
       moving = true;
     } else {
       m.angle += Math.PI + (Math.random() - 0.5);
     }
-    // Smooth step-height changes into a little hop instead of snapping —
-    // climbing up is deliberately slower/floatier than settling back down.
+    // Smooth step-height changes into a hop instead of snapping. Climbing
+    // gradually scales with how many blocks tall the step is (a 3-block climb
+    // takes ~3x as long as a 1-block one); descending is just a fall from the
+    // top block to the bottom one, so its duration doesn't scale with drop
+    // height the same way — it's always quick, never a slow gradual descent.
     const groundTarget = heightAt(m.x, m.z) + 0.5;
     if (Math.abs(groundTarget - m.groundTarget) > 0.01) {
       m.hopFrom = m.visualY;
@@ -439,18 +473,30 @@ function updateMonsters(dt, now) {
     }
     if (m.hopT < 1) {
       const climbing = m.hopTo > m.hopFrom;
-      const hopDuration = climbing ? 0.55 : 0.25;
+      const stepSize = Math.abs(m.hopTo - m.hopFrom);
+      const hopDuration = climbing ? 0.5 * Math.max(1, stepSize) : 0.2;
       m.hopT = Math.min(1, m.hopT + dt / hopDuration);
-      const ease = 1 - (1 - m.hopT) * (1 - m.hopT); // ease-out
-      const base = m.hopFrom + (m.hopTo - m.hopFrom) * ease;
-      const arc = Math.sin(m.hopT * Math.PI) * (climbing ? 0.24 : 0.1);
-      m.visualY = base + arc;
+      if (climbing) {
+        const ease = 1 - (1 - m.hopT) * (1 - m.hopT); // ease-out
+        const arc = Math.sin(m.hopT * Math.PI) * 0.24;
+        m.visualY = m.hopFrom + (m.hopTo - m.hopFrom) * ease + arc;
+      } else {
+        const fall = m.hopT * m.hopT; // ease-in — accelerating like gravity
+        m.visualY = m.hopFrom + (m.hopTo - m.hopFrom) * fall;
+      }
     } else {
       m.visualY = m.hopTo;
     }
     const idleBob = m.hopT >= 1 ? Math.sin(now * 2.2 + m.phase) * 0.04 : 0;
     m.rig.root.position.set(m.x, m.visualY + idleBob, m.z);
     m.rig.root.rotation.y = m.angle;
+
+    // Base size always tracks current level (so a level-up from eating grows
+    // it immediately) with a brief punchy pulse layered on top right after a
+    // kill, to sell the "eating" impact.
+    if (m.eatPulse > 0) m.eatPulse = Math.max(0, m.eatPulse - dt);
+    const pulse = m.eatPulse > 0 ? 1 + 0.25 * Math.sin((m.eatPulse / 0.3) * Math.PI) : 1;
+    m.rig.root.scale.setScalar(stackScale(m.stackLevel) * pulse);
 
     if (moving) m.walkPhase += dt * m.speed * 3.2;
     const swing = Math.sin(m.walkPhase) * 0.5;
@@ -538,10 +584,12 @@ function spawnHitFlinch(m) {
   }
 }
 
-function spawnMergeFx(x, y, z) {
+// Flash + shockwave at the spot a zombie got eaten — paired with a gib burst
+// (see eatZombie) so the kill reads as violent, not a polite hand-off.
+function spawnEatFx(x, y, z) {
   const ringGeo = new THREE.RingGeometry(0.2, 0.35, 24);
   const ringMat = new THREE.MeshBasicMaterial({
-    color: 0x9d5cff, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
+    color: 0xff5a3c, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending, depthWrite: false,
   });
   const ring = new THREE.Mesh(ringGeo, ringMat);
@@ -552,7 +600,7 @@ function spawnMergeFx(x, y, z) {
 
   const flashGeo = new THREE.SphereGeometry(0.4, 10, 8);
   const flashMat = new THREE.MeshBasicMaterial({
-    color: 0xc99bff, transparent: true, opacity: 0.9,
+    color: 0xffcf6b, transparent: true, opacity: 0.9,
     blending: THREE.AdditiveBlending, depthWrite: false,
   });
   const flash = new THREE.Mesh(flashGeo, flashMat);
@@ -621,8 +669,9 @@ function buildHeightmap(seed, biome) {
 function stratumForDepth(depth) {
   if (depth <= 1) return { type: "sub", resistance: 1 };
   if (depth <= 4) return { type: "rock", resistance: 3 };
-  if (depth <= 9) return { type: "deepstone", resistance: 6 };
-  return { type: "bedrock", resistance: 10 };
+  if (depth <= 9) return { type: "ironstone", resistance: 6 };
+  if (depth <= 19) return { type: "deepstone", resistance: 10 };
+  return { type: "bedrock", resistance: 18 };
 }
 
 function stratumAt(biome, y, originalHeight) {
@@ -633,6 +682,22 @@ function stratumAt(biome, y, originalHeight) {
     return { type: "grass", resistance: 1 };
   }
   return stratumForDepth(depth);
+}
+
+// A brightness multiplier sampled from smooth, continuous noise over a
+// block's real world position — used as an InstancedMesh per-instance color
+// (see rebuildBlockMeshes) so mineral variation blends across many
+// neighboring blocks into patches and streaks, the way a real rock face
+// looks, instead of each block being independently random and reading as its
+// own separately-tinted swatch. Two octaves at different frequencies: one
+// broad (large light/dark patches) and one finer (subtler local variation) —
+// y is folded in at a different frequency so the patches aren't just
+// vertical bands, they wander in 3D as you dig.
+function terrainTint(x, y, z) {
+  const broad = fbm(tintNoise, x * 0.045, z * 0.045 + y * 0.03, 2, 0.5);
+  const fine = tintNoise.noise2D(x * 0.16 - y * 0.11, z * 0.16 + 50);
+  const t = broad * 0.75 + fine * 0.25; // roughly [-1, 1]
+  return 0.86 + (t * 0.5 + 0.5) * 0.28; // ~0.86–1.14 brightness
 }
 
 function clearGroup(group) {
@@ -648,8 +713,8 @@ function clearGroup(group) {
   }
 }
 
-// Rebuilds the terrain InstancedMeshes from currentHeights/scorched. Called on
-// world generation and again after every explosion edits the terrain.
+// Rebuilds the terrain InstancedMeshes from currentHeights/damageAccum. Called
+// on world generation and again after every explosion edits the terrain.
 //
 // Every column fills all the way down to the SAME global floor — the single
 // lowest point anywhere on the map, minus a spare buffer — not just some
@@ -660,7 +725,7 @@ function clearGroup(group) {
 function rebuildBlockMeshes() {
   const biome = currentBiome;
   const heights = currentHeights;
-  const { materials, variantCounts } = activeMaterials;
+  const { materials, variantCounts, stagedTypes } = activeMaterials;
 
   let minHeight = Infinity;
   for (let i = 0; i < heights.length; i++) if (heights[i] < minHeight) minHeight = heights[i];
@@ -674,13 +739,19 @@ function rebuildBlockMeshes() {
       const originalHeight = originalHeights[idx];
       const bottom = globalBottom; // same for every column — see comment above
       for (let y = height; y >= bottom; y--) {
-        let type = stratumAt(biome, y, originalHeight).type;
-        // Char is a surface scorch mark from the blast, not a permanent stain on
-        // the column — once digging exposes real rock strata below the original
-        // topsoil, show that rock/deepstone/bedrock instead of hiding it under black.
-        if (y === height && scorched[idx] && originalHeight - y <= 1) type = "charred";
+        const stratum = stratumAt(biome, y, originalHeight);
+        const type = stratum.type;
+        // A block that's been hit but not yet broken shows cracks scaled to
+        // how close it is to breaking, on top of ITS OWN material — there is
+        // no separate "scorched" block type overlaid on top of it. Only the
+        // current top-of-column block can carry unresolved damage.
+        let stage = 0;
+        if (y === height && stagedTypes.has(type) && stratum.resistance > 1) {
+          const ratio = damageAccum[idx] / stratum.resistance;
+          if (ratio > 0) stage = Math.min(3, Math.ceil(ratio * 3));
+        }
         const variant = Math.floor(cellHash(x + y * 97, z) * variantCounts[type]);
-        const key = `${type}:${variant}`;
+        const key = `${type}:${variant}:${stage}`;
         let list = buckets.get(key);
         if (!list) { list = []; buckets.set(key, list); }
         list.push(x, y, z);
@@ -691,18 +762,31 @@ function rebuildBlockMeshes() {
   if (blockMeshes) { for (const m of blockMeshes) root.remove(m); }
   blockMeshes = [];
   const dummy = new THREE.Object3D();
+  const dummyColor = new THREE.Color();
   for (const [key, list] of buckets) {
-    const [type, variantStr] = key.split(":");
+    const [type, variantStr, stageStr] = key.split(":");
     const variant = Number(variantStr);
-    const mat = materials[type][variant];
+    const stage = Number(stageStr);
+    // Grass keeps its 6-face [side,side,top,bottom,side,side] array as-is —
+    // it's topsoil (resistance 1) and never carries partial damage, so it has
+    // no crack-stage ladder to index into. It also skips the tint below (see
+    // terrainTint) since its material array isn't set up for vertex colors.
+    const stages = materials[type][variant];
+    const mat = type === "grass" ? stages : stages[Math.min(stage, stages.length - 1)];
     const n = list.length / 3;
     const mesh = new THREE.InstancedMesh(blockGeo, mat, n);
     for (let i = 0; i < n; i++) {
-      dummy.position.set(list[i * 3], list[i * 3 + 1], list[i * 3 + 2]);
+      const bx = list[i * 3], by = list[i * 3 + 1], bz = list[i * 3 + 2];
+      dummy.position.set(bx, by, bz);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
+      if (type !== "grass") {
+        dummyColor.setScalar(terrainTint(bx, by, bz));
+        mesh.setColorAt(i, dummyColor);
+      }
     }
     mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     root.add(mesh);
     blockMeshes.push(mesh);
   }
@@ -713,8 +797,8 @@ function generateWorld(seed, biomeKey) {
   currentBiome = biome;
   currentHeights = buildHeightmap(seed, biome);
   originalHeights = currentHeights.slice(); // pristine reference for depth/strata lookups — never mutated
-  scorched = new Uint8Array(GRID * GRID);
   damageAccum = new Uint16Array(GRID * GRID);
+  tintNoise = seededNoise(seed + ":tint");
   const rand = mulberry32(hashSeed(seed + ":trees"));
 
   if (activeMaterials) disposeBlockMaterials(activeMaterials.materials);
@@ -957,9 +1041,6 @@ function craterEdit(bx, bz) {
         const base = Math.max(1, Math.round((R - d) * 0.85 + 1));
         const dmg = d <= coreR ? base * 2 : base;
         applyDamage(idx, dmg);
-        scorched[idx] = 1;
-      } else if (Math.random() < 0.55) {
-        scorched[idx] = 1;
       }
     }
   }
@@ -1347,7 +1428,7 @@ function loop() {
   shake *= Math.exp(-4.5 * dt);
   processClickQueue();
   updateMonsters(dt, now);
-  checkZombieMerges();
+  checkZombieEats();
   updateMissiles(dt);
   updateFx(dt);
   updateCamera();
