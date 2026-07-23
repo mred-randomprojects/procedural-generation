@@ -31,7 +31,10 @@
       <h2>💔 The Heart has fallen</h2>
       <div id="vx-go-stats"></div>
       <div id="vx-legacy-shop"></div>
-      <button id="vx-go-restart">💎 Defend again</button>
+      <div class="go-actions">
+        <button id="vx-go-restart">💎 Defend again</button>
+        <button id="vx-go-menu">🏠 Menu</button>
+      </div>
     </div>
   </div>
 
@@ -43,6 +46,11 @@
         <span class="only-fine">Click</span><span class="only-coarse">Tap</span> to fire missiles · Zombies eat each other and <b>evolve</b> ·
         Spend ⚡ on repairs &amp; turrets · Survive the waves
       </p>
+      <div class="title-mode">
+        <button class="mode-btn active" data-mode="ranked">🏆 Ranked</button>
+        <button class="mode-btn" data-mode="sandbox">🧪 Sandbox</button>
+      </div>
+      <p class="title-mode-note" id="vx-mode-note">Best score, achievements &amp; shards are saved.</p>
       <div class="title-diff">
         <button class="diff-btn" data-diff="easy">🌱 Easy</button>
         <button class="diff-btn active" data-diff="normal">⚔️ Normal</button>
@@ -65,6 +73,7 @@
       <div class="paused-actions">
         <button id="vx-resume-btn">▶ Resume</button>
         <button id="vx-pause-newrun">↻ New run</button>
+        <button id="vx-pause-menu">🏠 Menu</button>
       </div>
       <div class="paused-hint only-fine">P — resume &nbsp;·&nbsp; R — new run</div>
     </div>
@@ -78,6 +87,7 @@
   </div>
 
   <div id="hud-score" class="hud-panel">
+    <div id="vx-sandbox-note">🧪 Sandbox — not saved</div>
     <div class="hud-score-row">
       <span class="hud-label">🧟 Zombies killed</span>
       <span id="vx-score-val">0</span>

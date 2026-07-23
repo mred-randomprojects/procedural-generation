@@ -146,6 +146,12 @@ const DIFFICULTIES = {
   hard: { label: "💀 Hard", hp: 0.75, wave: 0.75, trickle: 0.75 },
 };
 let difficulty = "normal";
+// "ranked" = the scored game: Tweaks are locked to canonical balance and the
+// run banks best-score / achievements / Legacy shards. "sandbox" = free play:
+// every Tweak is unlocked but NOTHING is saved. Chosen on the title screen,
+// persisted across sessions. This is the wall that stops a doctored run from
+// laundering easy progress into permanent meta-progression.
+let mode = "ranked";
 
 function heartMaxHp() {
   return Math.round((100 + legacy.heartRank * 20) * DIFFICULTIES[difficulty].hp);
@@ -159,12 +165,13 @@ function loadSettings() {
     if (typeof saved.volume === "number") settings.volume = saved.volume;
     if (typeof saved.shake === "boolean") settings.shake = saved.shake;
     if (DIFFICULTIES[saved.difficulty]) difficulty = saved.difficulty;
+    if (saved.mode === "ranked" || saved.mode === "sandbox") mode = saved.mode;
   } catch { /* defaults */ }
   setMasterVolume(settings.volume);
 }
 function saveSettings() {
   try {
-    localStorage.setItem("vx-settings", JSON.stringify({ ...settings, difficulty }));
+    localStorage.setItem("vx-settings", JSON.stringify({ ...settings, difficulty, mode }));
   } catch { /* private mode */ }
 }
 loadSettings();
@@ -185,6 +192,7 @@ let unlockedAchievements = {};
 try { unlockedAchievements = JSON.parse(localStorage.getItem("vx-achievements") || "{}"); } catch { /* none */ }
 
 function unlockAchievement(key) {
+  if (mode === "sandbox") return; // sandbox runs never earn achievements
   if (unlockedAchievements[key]) return;
   unlockedAchievements[key] = true;
   try { localStorage.setItem("vx-achievements", JSON.stringify(unlockedAchievements)); } catch { /* oh well */ }
@@ -528,11 +536,6 @@ function endRun() {
   let maxLevel = 1;
   for (const m of monsters) if (m.stackLevel > maxLevel) maxLevel = m.stackLevel;
   const score = runScore(survived);
-  let best = 0;
-  try {
-    best = Number(localStorage.getItem("vx-best-score") || 0);
-    if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
-  } catch { /* storage may be unavailable; the run still ends cleanly */ }
 
   playGameOver();
 
@@ -542,21 +545,36 @@ function endRun() {
     shake = 4.5;
   }
 
-  // Bank Legacy shards — every defeat still buys future power.
-  const shardsEarned = Math.max(1, Math.floor(score / 50));
-  legacy.shards += shardsEarned;
-  saveLegacy();
-
   const stats = document.getElementById("vx-go-stats");
-  if (stats) {
-    const mins = Math.floor(survived / 60), secs = Math.round(survived % 60);
-    stats.innerHTML =
-      `Survived <b>${mins}m ${secs}s</b> across <b>${waveNumber}</b> waves<br>` +
-      `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b><br>` +
+  const mins = Math.floor(survived / 60), secs = Math.round(survived % 60);
+  const line1 =
+    `Survived <b>${mins}m ${secs}s</b> across <b>${waveNumber}</b> waves<br>` +
+    `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b>`;
+
+  if (mode === "sandbox") {
+    // Free play banks nothing: no best-score, no shards, no Legacy shop.
+    if (stats) stats.innerHTML = `${line1}<br><span class="go-sandbox">🧪 Sandbox run — nothing saved</span>`;
+    const shop = document.getElementById("vx-legacy-shop");
+    if (shop) shop.innerHTML = "";
+  } else {
+    let best = 0;
+    try {
+      best = Number(localStorage.getItem("vx-best-score") || 0);
+      if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
+    } catch { /* storage may be unavailable; the run still ends cleanly */ }
+
+    // Bank Legacy shards — every defeat still buys future power.
+    const shardsEarned = Math.max(1, Math.floor(score / 50));
+    legacy.shards += shardsEarned;
+    saveLegacy();
+
+    if (stats) stats.innerHTML =
+      `${line1}<br>` +
       `Score: <b>${score}</b> · <span class="go-best">Best: ${best}</span><br>` +
       `🔮 Shards earned: <b>+${shardsEarned}</b>`;
+    renderLegacyShop();
   }
-  renderLegacyShop();
+
   document.getElementById("vx-gameover")?.classList.add("show");
   updateHeartHud();
 }
@@ -601,6 +619,10 @@ function renderLegacyShop() {
 // game-over restart button (which regenerates the world too).
 function resetRun() {
   gameState = "playing";
+  // Sync HUD to the run's mode, and force canonical balance for scored runs
+  // so a ranked game can never inherit doctored Tweaks from a sandbox session.
+  applyMode();
+  if (mode === "ranked") resetTweaksToDefaults();
   waveNumber = 0;
   waveTimer = 18 * DIFFICULTIES[difficulty].wave;
   trickleTimer = 5 * DIFFICULTIES[difficulty].trickle;
@@ -892,6 +914,49 @@ let simSpeed = 1; // time multiplier for the zombie sim (movement + combat), not
 let hpPerLevel = 1; // extra max HP per level past 1 — crank it to make elites tanky against blasts too
 let dmgPerLevel = 1; // extra DPS per level past 1 dealt in zombie-vs-zombie fights
 let atkPerLevel = 0.25; // attack-rate growth per level past 1 (0 = every level shoots at the same cadence)
+
+// The ⚙️ Tweaks sliders, described once so the input handlers (init) and
+// resetTweaksToDefaults() share a single source of truth for each slider's
+// default value, label formatting, and live apply side-effects.
+const TWEAK_SLIDERS = [
+  { id: "vx-spawn-per-kill", def: 2, fmt: (v) => String(v), apply: (v) => { spawnsPerKill = v; } },
+  { id: "vx-spawn-per-eat", def: 1, fmt: (v) => String(v), apply: (v) => { spawnsPerEat = v; } },
+  { id: "vx-spawn-delay", def: 0, fmt: (v) => String(v), apply: (v) => { spawnDelay = v; } },
+  { id: "vx-speed-per-level", def: 0.3, fmt: (v) => v.toFixed(2), apply: (v) => {
+      speedPerLevel = v;
+      // Re-derive every living zombie's speed so the new slope applies now.
+      for (const m of monsters) m.speed = stackSpeed(m.stackLevel) + Math.random() * 0.2;
+    } },
+  { id: "vx-sim-speed", def: 1, fmt: (v) => v.toFixed(1), apply: (v) => { simSpeed = v; } },
+  { id: "vx-hp-per-level", def: 1, fmt: (v) => v.toFixed(2), apply: (v) => {
+      hpPerLevel = v;
+      for (const m of monsters) m.hp = maxHpFor(m.stackLevel); // heal all to the new full
+    } },
+  { id: "vx-dmg-per-level", def: 1, fmt: (v) => v.toFixed(2), apply: (v) => { dmgPerLevel = v; } },
+  { id: "vx-atk-per-level", def: 0.25, fmt: (v) => v.toFixed(2), apply: (v) => { atkPerLevel = v; } },
+];
+
+// Snap every tweak — sim var AND slider/label DOM — back to its canonical
+// default. Called at the start of every RANKED run (see resetRun).
+function resetTweaksToDefaults() {
+  for (const s of TWEAK_SLIDERS) {
+    const el = document.getElementById(s.id);
+    const label = document.getElementById(s.id + "-val");
+    if (el) el.value = String(s.def);
+    if (label) label.textContent = s.fmt(s.def);
+    s.apply(s.def);
+  }
+}
+
+// Reflect the current mode in the DOM: sandbox reveals the Tweaks panel and
+// the "not saved" markers (via body.sandbox); ranked hides Tweaks outright so
+// a scored run has no doctoring surface at all.
+function applyMode() {
+  const sandbox = mode === "sandbox";
+  document.body.classList.toggle("sandbox", sandbox);
+  const tweaks = document.getElementById("vx-tweaks");
+  if (tweaks) tweaks.style.display = sandbox ? "" : "none";
+}
 
 // Max HP and fight-DPS as functions of level, both anchored at 1 for a
 // level-1 zombie and growing by their sliders. Blast damage stays flat
@@ -2418,34 +2483,17 @@ function init() {
   });
 
   // Tweaks sliders: `input` (not `change`) so values apply live while
-  // dragging, each mirrored into its readout label.
-  const bindSlider = (id, format, apply) => {
-    const el = document.getElementById(id);
-    const label = document.getElementById(id + "-val");
+  // dragging, each mirrored into its readout label. Config lives in the
+  // module-level TWEAK_SLIDERS table so resetTweaksToDefaults() shares it.
+  for (const s of TWEAK_SLIDERS) {
+    const el = document.getElementById(s.id);
+    const label = document.getElementById(s.id + "-val");
     el.addEventListener("input", () => {
       const v = Number(el.value);
-      label.textContent = format(v);
-      apply(v);
+      label.textContent = s.fmt(v);
+      s.apply(v);
     });
-  };
-  bindSlider("vx-spawn-per-kill", (v) => String(v), (v) => { spawnsPerKill = v; });
-  bindSlider("vx-spawn-per-eat", (v) => String(v), (v) => { spawnsPerEat = v; });
-  bindSlider("vx-spawn-delay", (v) => String(v), (v) => { spawnDelay = v; });
-  bindSlider("vx-speed-per-level", (v) => v.toFixed(2), (v) => {
-    speedPerLevel = v;
-    // Re-derive every living zombie's speed from its level so the new slope
-    // applies immediately, not just to future spawns/level-ups.
-    for (const m of monsters) m.speed = stackSpeed(m.stackLevel) + Math.random() * 0.2;
-  });
-  bindSlider("vx-sim-speed", (v) => v.toFixed(1), (v) => { simSpeed = v; });
-  bindSlider("vx-hp-per-level", (v) => v.toFixed(2), (v) => {
-    hpPerLevel = v;
-    // Max HP just changed for everyone — heal all to their new full so no
-    // zombie is left with hp above max (or unfairly half-dead vs a new scale).
-    for (const m of monsters) m.hp = maxHpFor(m.stackLevel);
-  });
-  bindSlider("vx-dmg-per-level", (v) => v.toFixed(2), (v) => { dmgPerLevel = v; });
-  bindSlider("vx-atk-per-level", (v) => v.toFixed(2), (v) => { atkPerLevel = v; });
+  }
   document.getElementById("vx-spawn-one").addEventListener("click", () => spawnRandomZombie());
   document.getElementById("vx-new-terrain").addEventListener("click", () => {
     const seedInput2 = document.getElementById("vx-seed");
@@ -2477,6 +2525,9 @@ function init() {
   document.getElementById("vx-pause-btn")?.addEventListener("click", togglePause);
   document.getElementById("vx-resume-btn")?.addEventListener("click", togglePause);
   document.getElementById("vx-pause-newrun")?.addEventListener("click", () => regenerate(true));
+  // Back to the title (also the only way to switch Ranked/Sandbox mid-session).
+  document.getElementById("vx-pause-menu")?.addEventListener("click", goToTitle);
+  document.getElementById("vx-go-menu")?.addEventListener("click", goToTitle);
 
   // Mobile browsers only allow audio to start inside a user gesture — see
   // unlockAudio. Every pointerdown re-checks, which also recovers the
@@ -2494,6 +2545,26 @@ function init() {
       saveSettings();
     });
   }
+
+  // Ranked vs Sandbox selector — mirrors the persisted mode into the title
+  // controls (active button, play-button label, and the "what's saved" note).
+  const modeNote = document.getElementById("vx-mode-note");
+  const updateModeUi = () => {
+    for (const b of document.querySelectorAll(".mode-btn")) b.classList.toggle("active", b.dataset.mode === mode);
+    const playBtn = document.getElementById("vx-title-play");
+    if (playBtn) playBtn.textContent = mode === "sandbox" ? "🧪 Enter Sandbox" : "▶ Defend the Heart";
+    if (modeNote) modeNote.textContent = mode === "sandbox"
+      ? "Free experimentation — nothing is saved."
+      : "Best score, achievements & shards are saved.";
+  };
+  for (const btn of document.querySelectorAll(".mode-btn")) {
+    btn.addEventListener("click", () => {
+      mode = btn.dataset.mode;
+      updateModeUi();
+      saveSettings();
+    });
+  }
+  updateModeUi();
   const volumeEl = document.getElementById("vx-volume");
   volumeEl.value = String(settings.volume);
   volumeEl.addEventListener("input", () => {
@@ -2573,6 +2644,14 @@ function loop() {
   }
   updateCamera();
   renderer.render(scene, camera);
+}
+
+// Abandon the current run and return to the title (from pause or game-over).
+// The sim freezes behind the menu; picking a mode + Play starts a fresh run.
+function goToTitle() {
+  document.getElementById("vx-gameover")?.classList.remove("show");
+  document.getElementById("vx-paused")?.classList.remove("show");
+  showTitle();
 }
 
 // The pre-run menu: world renders and idles behind it, sim frozen until

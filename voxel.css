@@ -92,6 +92,20 @@ html, body {
 }
 .title-tag { margin: 0 0 12px; color: #9fb0c0; font-size: 14px; }
 .title-how { margin: 0 0 16px; color: #7f93a5; font-size: 12.5px; line-height: 1.6; }
+.title-mode { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; }
+.mode-btn {
+  background: #1d2833;
+  color: #b7c4d0;
+  border: 1px solid #33475c;
+  border-radius: 8px;
+  padding: 7px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mode-btn:hover { filter: brightness(1.2); }
+.mode-btn.active { background: #133247; color: #9fe8ff; border-color: #2e6f96; }
+.title-mode-note { margin: 0 0 14px; font-size: 11.5px; color: #8ba0c0; }
+
 .title-diff { display: flex; gap: 8px; justify-content: center; margin-bottom: 14px; }
 .diff-btn {
   background: #1d2833;
@@ -161,7 +175,7 @@ html, body {
   text-align: center;
 }
 .paused-title { font-size: 17px; margin-bottom: 12px; }
-.paused-actions { display: flex; gap: 10px; justify-content: center; }
+.paused-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .paused-actions button {
   background: #133247;
   color: #9fe8ff;
@@ -260,6 +274,7 @@ html, body {
 .legacy-buy:hover:not(:disabled) { filter: brightness(1.3); }
 .legacy-buy:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.go-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 #vx-go-restart {
   background: #133247;
   color: #9fe8ff;
@@ -270,6 +285,17 @@ html, body {
   cursor: pointer;
 }
 #vx-go-restart:hover { filter: brightness(1.25); }
+#vx-go-menu {
+  background: #1d2833;
+  color: #b7c4d0;
+  border: 1px solid #33475c;
+  border-radius: 9px;
+  padding: 10px 22px;
+  font-size: 15px;
+  cursor: pointer;
+}
+#vx-go-menu:hover { filter: brightness(1.25); }
+.go-sandbox { color: #d9c5ff; font-weight: 700; }
 
 #hud-top {
   top: 14px;
@@ -409,6 +435,23 @@ html, body {
   font-size: 13px;
   min-width: 210px;
 }
+
+/* Persistent "this run doesn't count" marker, shown in the run-stats panel
+   only while a sandbox run is live (body.sandbox, set by applyMode). */
+#vx-sandbox-note {
+  display: none;
+  margin-bottom: 7px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(106, 79, 174, 0.28);
+  border: 1px solid rgba(160, 120, 255, 0.55);
+  color: #d9c5ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-align: center;
+}
+body.sandbox #vx-sandbox-note { display: block; }
 
 .hud-score-row {
   display: flex;
@@ -632,8 +675,9 @@ input, select { -webkit-user-select: text; user-select: text; }
 /* Bigger touch targets + no-iOS-zoom input font sizes on touch devices. */
 @media (any-pointer: coarse) {
   #vx-seed, #vx-biome { font-size: 16px; }
-  #hud-shop button, .diff-btn, #vx-title-play, .legacy-buy, #vx-go-restart,
-  #vx-new, #vx-locate-elite, #vx-tweaks button, .paused-actions button {
+  #hud-shop button, .diff-btn, .mode-btn, #vx-title-play, .legacy-buy,
+  #vx-go-restart, #vx-go-menu, #vx-new, #vx-locate-elite, #vx-tweaks button,
+  .paused-actions button {
     min-height: 44px;
   }
   .hud-slider-inner input[type="range"],
