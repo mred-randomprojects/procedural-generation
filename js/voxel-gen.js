@@ -57,6 +57,17 @@ const GRID = 44;
 // whole map (not per-column) — see rebuildBlockMeshes.
 const DEPTH_SPARE = 5;
 
+// GUIDING PRINCIPLE — no artificial limits. This game is more fun for humans
+// when systems are left uncapped, even when a limit seems "reasonable" or
+// prudent. The zombie population is the canonical example: every kill spawns
+// 2 new zombies (see killMonstersNear) with NO cap on monsters.length, ever.
+// MONSTER_COUNT below is only the *initial* spawn count at world-gen time —
+// it is not a ceiling. Do not add a cap here (or a general population cap
+// anywhere else in this file) without explicit user direction; if a limit
+// starts to feel necessary for performance, raise it with the user rather
+// than silently capping. Zombies do consolidate via mergeZombies() when two
+// same-level stacks touch — that reduces the on-screen entity count as a
+// gameplay mechanic, but it is not a spawn limit and must not become one.
 const MONSTER_COUNT = 9;
 const MERGE_DIST = 0.85;
 const STARTING_MAX_BLAST = 3;
@@ -498,6 +509,8 @@ function killMonstersNear(bx, bz, r) {
     updateScoreHud();
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
+    // No cap, intentionally — see the "no artificial limits" note near
+    // MONSTER_COUNT. Every kill spawns 2 more, unconditionally, forever.
     let toSpawn = kills * 2;
     while (toSpawn-- > 0) spawnRandomZombie();
   }
