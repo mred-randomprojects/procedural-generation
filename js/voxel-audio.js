@@ -287,6 +287,126 @@ export function playTurretShot() {
   zap.stop(t0 + 0.08);
 }
 
+// Quick rising blip for each link in a kill combo — pitch climbs with the
+// combo count so a growing chain is audible without looking at the meter.
+export function playComboTick(count) {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 0.5;
+  master.connect(getBus(c));
+
+  // Pitch climbs a semitone per combo step, flattening out via log so huge
+  // chains stay musical instead of supersonic.
+  const freq = 520 * Math.pow(2, Math.log2(1 + count) / 4);
+  const osc = c.createOscillator();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(freq, t0);
+  osc.frequency.exponentialRampToValueAtTime(freq * 1.35, t0 + 0.07);
+  const g = envGain(c, master, t0, 0.004, 0.09, 0.5);
+  osc.connect(g);
+  osc.start(t0);
+  osc.stop(t0 + 0.12);
+}
+
+// Low, ominous descending war-horn + rumble: a boss has entered the map.
+export function playBossSpawn() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 1.1;
+  master.connect(getBus(c));
+
+  for (const detune of [0, 7]) {
+    const horn = c.createOscillator();
+    horn.type = "sawtooth";
+    horn.frequency.setValueAtTime(116 * Math.pow(2, detune / 1200), t0);
+    horn.frequency.exponentialRampToValueAtTime(72, t0 + 0.9);
+    const filt = c.createBiquadFilter();
+    filt.type = "lowpass";
+    filt.frequency.value = 700;
+    const g = envGain(c, master, t0, 0.05, 1.0, 0.55);
+    horn.connect(filt);
+    filt.connect(g);
+    horn.start(t0);
+    horn.stop(t0 + 1.2);
+  }
+  darkNoise(c, master, 1.4, 260, 55, 0.8, t0 + 0.1, 0.2, 1.2, 0.5);
+}
+
+// Triumphant rising arpeggio + thud — the boss's bounty is yours.
+export function playBossDown() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 1.0;
+  master.connect(getBus(c));
+
+  const thud = c.createOscillator();
+  thud.type = "sine";
+  thud.frequency.setValueAtTime(130, t0);
+  thud.frequency.exponentialRampToValueAtTime(40, t0 + 0.25);
+  const thudGain = envGain(c, master, t0, 0.005, 0.3, 0.9);
+  thud.connect(thudGain);
+  thud.start(t0);
+  thud.stop(t0 + 0.4);
+
+  [523, 659, 784, 1047].forEach((freq, i) => {
+    const t = t0 + 0.08 + i * 0.09;
+    const osc = c.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(freq, t);
+    const g = envGain(c, master, t, 0.008, 0.22, 0.4);
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(t + 0.3);
+  });
+}
+
+// Warm three-note arpeggio for a completed contract — reward, not alarm.
+export function playContractDone() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 0.9;
+  master.connect(getBus(c));
+
+  [659, 831, 988].forEach((freq, i) => {
+    const t = t0 + i * 0.11;
+    const osc = c.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, t);
+    const g = envGain(c, master, t, 0.01, 0.28, 0.45);
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(t + 0.35);
+  });
+}
+
+// Short bright fanfare: the run just became a new personal best.
+export function playNewBest() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 1.0;
+  master.connect(getBus(c));
+
+  const notes = [[0, 523], [0.12, 659], [0.24, 784], [0.36, 1047], [0.52, 1047]];
+  for (const [start, freq] of notes) {
+    const osc = c.createOscillator();
+    osc.type = "square";
+    const filt = c.createBiquadFilter();
+    filt.type = "lowpass";
+    filt.frequency.value = 2400;
+    const g = envGain(c, master, t0 + start, 0.01, start === 0.52 ? 0.5 : 0.16, 0.3);
+    osc.frequency.setValueAtTime(freq, t0 + start);
+    osc.connect(filt);
+    filt.connect(g);
+    osc.start(t0 + start);
+    osc.stop(t0 + start + 0.6);
+  }
+}
+
 // A loud, satisfying pop/splat + descending groan + low impact thud for a
 // zombie kill. Gets a little louder/beefier for multi-kills (count > 1).
 export function playZombieKill(count = 1) {

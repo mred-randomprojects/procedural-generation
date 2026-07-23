@@ -474,6 +474,26 @@ body.sandbox #vx-sandbox-note { display: block; }
   font-variant-numeric: tabular-nums;
 }
 
+/* Kill-combo meter: hidden until a chain of 2+ is alive, then shows the
+   count, the payout multiplier, and a bar draining toward the chain's end. */
+.hud-combo { display: none; margin-top: 8px; }
+.hud-combo.active { display: block; }
+.hud-combo .hud-label { color: #ffb45a; font-weight: 700; }
+.hud-combo-mult { color: #ffcf5a; font-size: 12px; font-variant-numeric: tabular-nums; }
+.hud-combo-bar {
+  margin-top: 4px;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 170, 60, 0.35);
+  overflow: hidden;
+}
+#vx-combo-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #ff8a3c, #ffd23b);
+}
+
 .hud-xp-block { margin-top: 8px; }
 
 .hud-xp-bar {
@@ -561,6 +581,44 @@ body.sandbox #vx-sandbox-note { display: block; }
   color: #6b7684;
   font-style: italic;
 }
+
+/* Contracts: three optional per-run objectives with live progress. */
+#hud-contracts {
+  bottom: 58px;
+  left: 14px;
+  padding: 10px 14px 12px;
+  font-size: 12.5px;
+  width: 250px;
+}
+#hud-contracts h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #d9b56a;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.contract-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2.5px 0;
+}
+.contract-label {
+  color: #cddae6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contract-progress {
+  color: #ffcf5a;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.contract-row.done .contract-label { color: #6f8a6f; text-decoration: line-through; }
+.contract-row.done .contract-progress { color: #7dd68a; }
 
 #vx-toast {
   position: absolute;
@@ -748,6 +806,17 @@ input, select { -webkit-user-select: text; user-select: text; }
     right: auto;
     bottom: auto;
   }
+
+  /* Contracts compact to a slim strip under the FAB column. */
+  #hud-contracts {
+    top: calc(170px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    bottom: auto;
+    width: min(48vw, 180px);
+    padding: 6px 9px 7px;
+    font-size: 10.5px;
+  }
+  #hud-contracts h2 { font-size: 10px; margin-bottom: 3px; }
 
   #hud-shop {
     left: calc(10px + env(safe-area-inset-left));

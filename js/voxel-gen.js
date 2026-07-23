@@ -3,6 +3,7 @@ import { buildBlockMaterials, disposeBlockMaterials, buildZombieMaterials, dispo
 import {
   playExplosion, playZombieKill, playHeartHit, playWaveStart,
   playGameOver, playPurchase, playTurretShot, setMasterVolume, unlockAudio,
+  playComboTick, playBossSpawn, playBossDown, playContractDone, playNewBest,
 } from "./voxel-audio.js";
 // All balance curves, progression costs, and game rules live in the pure
 // core module (tested by tests/heartfall-core.test.mjs); this file supplies
@@ -190,6 +191,75 @@ let waveNumber = 0, waveTimer = 18, trickleTimer = 5;
 let runStartTime = 0; // seconds (performance.now() clock) when the current run began
 let lastHeartHitSound = 0; // throttle: a swarm chips the Heart every frame, the alarm shouldn't
 
+/* ---------- kill combos ---------- */
+// Chained player kills inside a rolling window (core.COMBO_WINDOW) build a
+// combo that multiplies every kill's XP/energy payout — the moment-to-moment
+// "keep the streak alive" hook. Uncapped, like everything else here.
+let combo = { count: 0, expiresAt: -Infinity };
+let runMaxCombo = 0;
+
+// Registers `kills` player kills right now and returns the payout
+// multiplier those kills earn (the kills count toward their own combo, so
+// one huge blast pays out at its own full chain).
+function registerPlayerKills(kills) {
+  const now = performance.now() / 1000;
+  combo = core.applyCombo(combo, kills, now);
+  if (combo.count > runMaxCombo) runMaxCombo = combo.count;
+  if (combo.count >= 10) unlockAchievement("combo-10");
+  if (combo.count >= 2) playComboTick(combo.count);
+  return core.comboMultiplier(combo.count);
+}
+
+function updateComboHud(now) {
+  const el = document.getElementById("vx-combo");
+  if (!el) return;
+  const active = gameState === "playing" && combo.count >= 2 && now < combo.expiresAt;
+  el.classList.toggle("active", active);
+  if (!active) return;
+  const val = document.getElementById("vx-combo-val");
+  const mult = document.getElementById("vx-combo-mult");
+  const fill = document.getElementById("vx-combo-fill");
+  if (val) val.textContent = `×${combo.count}`;
+  if (mult) mult.textContent = `payout ×${core.comboMultiplier(combo.count).toFixed(2)}`;
+  if (fill) fill.style.width = `${Math.max(0, Math.min(1, (combo.expiresAt - now) / core.COMBO_WINDOW)) * 100}%`;
+}
+
+/* ---------- per-run counters (feed the contracts system) ---------- */
+// Shape defined in core (freshRunCounters) so contractProgress can read it.
+let runCounters = core.freshRunCounters();
+
+function noteContractKill(source, level) {
+  runCounters.kills++;
+  if (level > runCounters.maxLevelKilled) runCounters.maxLevelKilled = level;
+  if (source === "mine") runCounters.mineKills++;
+  else if (source === "turret") runCounters.turretKills++;
+  checkContracts();
+}
+
+function noteBlastKills(kills, maxLevel) {
+  runCounters.kills += kills;
+  if (kills > runCounters.maxBlastKills) runCounters.maxBlastKills = kills;
+  if (maxLevel > runCounters.maxLevelKilled) runCounters.maxLevelKilled = maxLevel;
+  checkContracts();
+}
+
+/* ---------- run drama: personal-best + close-call tracking ---------- */
+let bestAtRunStart = 0; // the score to beat when the run began (0 = none)
+let newBestShown = false; // fanfare fires once per run
+let lowestHeartFrac = 1; // the closest the Heart came to dying this run
+
+// Fires the "new personal best" fanfare the moment a scored run overtakes
+// the previous record — called from the score-changing paths, cheap.
+function maybeCelebrateNewBest() {
+  if (newBestShown || mode === "sandbox" || bestAtRunStart <= 0 || gameState !== "playing") return;
+  const survived = performance.now() / 1000 - runStartTime;
+  if (runScore(survived) > bestAtRunStart) {
+    newBestShown = true;
+    showToast("🏆 NEW PERSONAL BEST!");
+    playNewBest();
+  }
+}
+
 // ⚡ Energy: the run's spendable currency, earned 1:1 with XP from kills but
 // tracked separately — XP is a lifetime total that drives blast-radius
 // unlocks and must never decrease, while energy is drained by shop purchases.
@@ -317,6 +387,8 @@ let vignetteTimer = null;
 function damageHeart(amount) {
   if (!heart || gameState !== "playing") return;
   heart.hp -= amount;
+  const frac = Math.max(0, heart.hp) / heartMaxHp();
+  if (frac < lowestHeartFrac) lowestHeartFrac = frac;
   updateHeartHud();
 
   // Red edge-of-screen flash + throttled alarm so damage is FELT even while
@@ -423,8 +495,9 @@ function spawnMonsters(biome, heights, seed) {
   updateZombieBoard();
 }
 
-// Spawns one fresh zombie at a random valid spot — used to replace a killed one.
-function spawnRandomZombie(atEdge = false) {
+// Spawns one fresh zombie at a random valid spot — used to replace a killed
+// one. `level` > 1 (with isBoss) spawns a pre-evolved boss instead.
+function spawnRandomZombie(atEdge = false, level = 1, isBoss = false) {
   const biome = currentBiome;
   let x = GRID / 2, z = GRID / 2, h;
   for (let tries = 0; tries < 30; tries++) {
@@ -448,14 +521,19 @@ function spawnRandomZombie(atEdge = false) {
   const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
   const rig = createZombieMesh(mats);
   monsterGroup.add(rig.root);
+  // Bosses stalk rather than sprint — their level's full stackSpeed would be
+  // comical, so it's damped (core.BOSS_SPEED_FACTOR).
+  const speed = isBoss
+    ? stackSpeed(level) * core.BOSS_SPEED_FACTOR
+    : stackSpeed(level) + Math.random() * 0.2;
   monsters.push({
-    rig, mats, x, z,
+    rig, mats, x, z, isBoss,
     angle: Math.random() * Math.PI * 2,
-    speed: stackSpeed(1) + Math.random() * 0.2,
+    speed,
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
-    hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
+    hp: maxHpFor(level), stackLevel: level, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
     ...initVerticalState(x, z),
     ...createMonsterUi(),
   });
@@ -498,12 +576,28 @@ function updateWaves(dt) {
     waveTimer = core.waveDelay(waveNumber, DIFFICULTIES[difficulty].wave);
     const count = core.waveSpawnCount(waveNumber);
     for (let i = 0; i < count; i++) spawnRandomZombie(true);
-    playWaveStart();
-    showToast(`🌊 Wave ${waveNumber} — ${count} invaders!`);
+    // Every 5th wave a boss stalks in from the rim on top of the batch — a
+    // pre-evolved elite with a bounty on its head (paid on a PLAYER kill).
+    if (core.isBossWave(waveNumber)) {
+      const bossLevel = core.bossLevelForWave(waveNumber);
+      spawnRandomZombie(true, bossLevel, true);
+      playBossSpawn();
+      showToast(`☠️ BOSS WAVE ${waveNumber} — a level ${bossLevel} colossus approaches! Bounty: ${core.bossBounty(bossLevel)}⚡`);
+    } else {
+      playWaveStart();
+      // Surviving a wave transition on a sliver of HP is a story moment —
+      // call it out instead of letting it blur past.
+      const frac = heart ? Math.max(0, heart.hp) / heartMaxHp() : 1;
+      showToast(frac < 0.12
+        ? `💦 Wave ${waveNumber} — the Heart barely holds at ${Math.max(1, Math.round(frac * 100))}%!`
+        : `🌊 Wave ${waveNumber} — ${count} invaders!`);
+    }
     if (waveNumber >= 5) unlockAchievement("wave-5");
     if (waveNumber >= 10) unlockAchievement("wave-10");
     if (waveNumber >= 15) unlockAchievement("wave-15");
     if (waveNumber >= 20) unlockAchievement("wave-20");
+    maybeCelebrateNewBest();
+    checkContracts(); // reach-wave / no-repair contracts tick on wave starts
     updateHeartHud();
   }
   trickleTimer -= dt;
@@ -535,9 +629,15 @@ function endRun() {
 
   const stats = document.getElementById("vx-go-stats");
   const mins = Math.floor(survived / 60), secs = Math.round(survived % 60);
+  const contractsDone = contracts.filter((c) => c.done).length;
+  const closest = lowestHeartFrac >= 1
+    ? "untouched"
+    : `${Math.max(0, Math.round(lowestHeartFrac * 100))}% HP`;
   const line1 =
     `Survived <b>${mins}m ${secs}s</b> across <b>${waveNumber}</b> waves<br>` +
-    `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b>`;
+    `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b><br>` +
+    `Best combo: <b>×${runMaxCombo}</b> · Bosses slain: <b>${bossesKilledThisRun}</b> · ` +
+    `Contracts: <b>${contractsDone}/3</b> · Closest call: <b>${closest}</b>`;
 
   if (mode === "sandbox") {
     // Free play banks nothing: no best-score, no shards, no Legacy shop.
@@ -600,19 +700,97 @@ function renderLegacyShop() {
   }
 }
 
+/* ---------- contracts: three optional objectives per run ---------- */
+// The variable-reward loop: each contract pays out the moment it completes
+// (energy immediately; shards banked too on scored runs), and clearing all
+// three pays a bonus. Drawn seeded — normal runs reroll each run, while a
+// daily's three contracts are the same for the whole day (its world seed is
+// the day itself, no nonce).
+let contracts = []; // [{ key, icon, kind, target, label, done }]
+let contractsAllDone = false;
+let contractRunNonce = 0;
+
+function resetContractsForRun() {
+  runCounters = core.freshRunCounters();
+  contractsAllDone = false;
+  contractRunNonce++;
+  const seedStr = mode === "daily" ? currentSeed : `${currentSeed}:run${contractRunNonce}`;
+  contracts = core.generateContracts(seedStr).map((c) => ({ ...c, done: false }));
+  renderContracts();
+}
+
+function checkContracts() {
+  if (contracts.length === 0 || gameState !== "playing") return;
+  runCounters.wave = waveNumber;
+  if (energy > runCounters.maxEnergy) runCounters.maxEnergy = energy;
+  let all = true;
+  for (const c of contracts) {
+    if (!c.done && core.contractDone(c, runCounters)) {
+      c.done = true;
+      energy += core.CONTRACT_REWARD.energy;
+      let msg = `📜 ${c.label} — +${core.CONTRACT_REWARD.energy}⚡`;
+      if (mode !== "sandbox") {
+        legacy.shards += core.CONTRACT_REWARD.shards;
+        saveLegacy();
+        msg += ` +${core.CONTRACT_REWARD.shards}🔮`;
+      }
+      playContractDone();
+      showToast(msg);
+      updateScoreHud();
+    }
+    if (!c.done) all = false;
+  }
+  if (all && !contractsAllDone) {
+    contractsAllDone = true;
+    unlockAchievement("contracts");
+    if (mode !== "sandbox") {
+      legacy.shards += core.CONTRACTS_ALL_BONUS_SHARDS;
+      saveLegacy();
+      showToast(`📜 ALL CONTRACTS COMPLETE — bonus +${core.CONTRACTS_ALL_BONUS_SHARDS}🔮!`);
+    } else {
+      showToast("📜 All contracts complete!");
+    }
+  }
+  renderContracts();
+}
+
+function renderContracts() {
+  const el = document.getElementById("vx-contracts-list");
+  if (!el) return;
+  el.innerHTML = contracts.map((c) => {
+    const progress = Math.min(core.contractProgress(c, runCounters), c.target);
+    return `<div class="contract-row${c.done ? " done" : ""}" title="${c.label}">
+      <span class="contract-label">${c.icon} ${c.label}</span>
+      <span class="contract-progress">${c.done ? "✓" : `${progress}/${c.target}`}</span>
+    </div>`;
+  }).join("");
+}
+
 // Fresh run on the CURRENT world: new Heart at full HP, wave clock reset.
 // Called from generateWorld (every new world starts a fresh run) and the
 // game-over restart button (which regenerates the world too).
 function resetRun() {
   gameState = "playing";
   // Sync HUD to the run's mode, and force canonical balance for scored runs
-  // so a ranked game can never inherit doctored Tweaks from a sandbox session.
+  // (ranked AND daily) so they can never inherit doctored Tweaks from a
+  // sandbox session.
   applyMode();
-  if (mode === "ranked") resetTweaksToDefaults();
+  if (mode !== "sandbox") resetTweaksToDefaults();
   waveNumber = 0;
   waveTimer = 18 * DIFFICULTIES[difficulty].wave;
   trickleTimer = 5 * DIFFICULTIES[difficulty].trickle;
   runStartTime = performance.now() / 1000;
+  combo = { count: 0, expiresAt: -Infinity };
+  runMaxCombo = 0;
+  bossesKilledThisRun = 0;
+  lowestHeartFrac = 1;
+  newBestShown = false;
+  // The score to beat for the mid-run "new personal best" fanfare.
+  bestAtRunStart = 0;
+  if (mode === "ranked") {
+    try { bestAtRunStart = Number(localStorage.getItem("vx-best-score") || 0); } catch { /* none */ }
+  }
+  resetContractsForRun();
   buildHeart(false);
   clearTurrets();
   clearMines();
@@ -652,6 +830,11 @@ function buyRepair() {
   if (gameState !== "playing" || energy < repairCost || !heart || heart.hp >= heartMaxHp()) return;
   energy -= repairCost;
   repairCost = core.nextShopCost(repairCost, "repair");
+  // The no-repair contract freezes at the wave of the FIRST repair.
+  if (runCounters.waveAtFirstRepair === Infinity) {
+    runCounters.waveAtFirstRepair = waveNumber;
+    renderContracts();
+  }
   heart.hp = Math.min(heartMaxHp(), heart.hp + 30);
   playPurchase();
   spawnEatFx(heart.x, heart.y + 1.2, heart.z); // reuse the flash/ring as a "heal burst"
@@ -753,7 +936,7 @@ function updateMines() {
       const m = monsters[j];
       if (Math.hypot(m.x - mine.x, m.z - mine.z) > MINE_BLAST) continue;
       m.hp -= MINE_DMG;
-      if (m.hp <= 0) killZombieByPlayer(m);
+      if (m.hp <= 0) killZombieByPlayer(m, "mine");
     }
   }
 }
@@ -862,7 +1045,7 @@ function updateTurrets(dt) {
       b.mesh.geometry.dispose();
       b.mesh.material.dispose();
       turretBolts.splice(i, 1);
-      if (b.target.hp <= 0) killZombieByPlayer(b.target);
+      if (b.target.hp <= 0) killZombieByPlayer(b.target, "turret");
       continue;
     }
     b.mesh.position.x += (dx / dist) * step;
@@ -871,9 +1054,22 @@ function updateTurrets(dt) {
   }
 }
 
-// A single player-credited kill (turret bolt finished a zombie off): same
-// rewards and respawn rules as a blast kill, minus the area logic.
-function killZombieByPlayer(m) {
+// A player kill landed the killing blow on a boss: pay the bounty (energy
+// only — on top of the normal level-scaled payout) with full fanfare.
+let bossesKilledThisRun = 0;
+function onBossKilledByPlayer(m) {
+  const bounty = core.bossBounty(m.stackLevel);
+  energy += bounty;
+  bossesKilledThisRun++;
+  unlockAchievement("boss-slayer");
+  playBossDown();
+  showToast(`☠️ Boss destroyed! Bounty +${bounty}⚡`);
+}
+
+// A single player-credited kill (a turret bolt or mine finished a zombie
+// off): same rewards and respawn rules as a blast kill, minus the area
+// logic. `source` says which defense earned it ("turret" | "mine").
+function killZombieByPlayer(m, source = "turret") {
   if (!monsters.includes(m)) return;
   monsterGroup.remove(m.rig.root);
   disposeZombieMaterials(m.mats);
@@ -882,12 +1078,16 @@ function killZombieByPlayer(m) {
   monsters.splice(monsters.indexOf(m), 1);
   playZombieKill(1);
   killCount++;
-  const earned = m.stackLevel * 10;
+  noteContractKill(source, m.stackLevel);
+  const mult = registerPlayerKills(1);
+  const earned = Math.round(core.killPayout(m.stackLevel) * mult);
   xp += earned;
   energy += earned;
+  if (m.isBoss) onBossKilledByPlayer(m);
   unlockAchievement("first-blood");
   if (killCount >= 100) unlockAchievement("exterminator");
   if (energy >= 500) unlockAchievement("rich");
+  maybeCelebrateNewBest();
   updateScoreHud();
   checkBlastUnlocks();
   let toSpawn = spawnsPerKill;
@@ -1145,6 +1345,10 @@ function resolveZombieKill(killer, loser) {
   spawnEatFx(lx, heightAt(lx, lz) + 1, lz);
   spawnGibs(lx, heightAt(lx, lz) + 0.9, lz);
 
+  // Losing a boss to the horde is a story beat: whoever ate it inherits its
+  // levels (eatXp below), and the bounty is gone. Punish hesitation loudly.
+  if (loser.isBoss) showToast("😱 The boss was devoured — its power lives on!");
+
   // Replacement spawns — default 1-for-1 keeps eats population-neutral, but
   // it's a tweakable: 0 lets the strong actually thin the herd, higher
   // values make eating feed the swarm.
@@ -1328,11 +1532,13 @@ function updateMonsters(dt, now) {
     }
   }
   updateEliteMarkers(now);
+  updateBossMarkers(now);
 }
 
 function killMonstersNear(bx, bz, r) {
   const coreR = Math.floor(r / 2); // inner half of the radius — double damage
-  let kills = 0, earned = 0;
+  let kills = 0, earned = 0, maxLevelKilled = 0;
+  const bossesDown = [];
   for (let i = monsters.length - 1; i >= 0; i--) {
     const m = monsters[i];
     const d = Math.hypot(m.x - bx, m.z - bz);
@@ -1348,16 +1554,25 @@ function killMonstersNear(bx, bz, r) {
     spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
     monsters.splice(i, 1);
     kills++;
-    earned += m.stackLevel * 10;
+    earned += core.killPayout(m.stackLevel);
+    if (m.stackLevel > maxLevelKilled) maxLevelKilled = m.stackLevel;
+    if (m.isBoss) bossesDown.push(m);
   }
   if (kills > 0) {
     playZombieKill(kills);
     killCount += kills;
-    xp += earned;
-    energy += earned; // spendable twin of the XP payout — see the energy declaration
+    // The blast's own kills feed its combo before the payout is computed,
+    // so one huge blast pays out at its full chained multiplier.
+    const mult = registerPlayerKills(kills);
+    const payout = Math.round(earned * mult);
+    xp += payout;
+    energy += payout; // spendable twin of the XP payout — see the energy declaration
+    noteBlastKills(kills, maxLevelKilled);
+    for (const b of bossesDown) onBossKilledByPlayer(b);
     unlockAchievement("first-blood");
     if (killCount >= 100) unlockAchievement("exterminator");
     if (energy >= 500) unlockAchievement("rich");
+    maybeCelebrateNewBest();
     updateScoreHud();
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
@@ -1796,12 +2011,13 @@ function updateEliteMarkers(now) {
   if (!locateEliteOn || monsters.length === 0) { hideAllEliteMarkers(); return; }
   // Highlight every zombie tied for the current max level — even when that
   // max is 1 (everyone highlighted): the button means "show me the top", and
-  // showing nothing when nobody has leveled up yet reads as broken.
+  // showing nothing when nobody has leveled up yet reads as broken. Bosses
+  // are excluded from the ranking — they wear permanent gold crowns instead.
   let maxLevel = 1;
-  for (const m of monsters) if (m.stackLevel > maxLevel) maxLevel = m.stackLevel;
+  for (const m of monsters) if (!m.isBoss && m.stackLevel > maxLevel) maxLevel = m.stackLevel;
   let count = 0;
   for (const m of monsters) {
-    if (m.stackLevel !== maxLevel) continue;
+    if (m.stackLevel !== maxLevel || m.isBoss) continue; // bosses wear gold crowns already
     const { ring, beam } = ensureEliteMarker(count++);
     ring.position.set(m.x, m.visualY + 0.05, m.z);
     ring.rotation.z = now * 1.8;
@@ -1817,6 +2033,58 @@ function updateEliteMarkers(now) {
   for (let i = count; i < eliteMarkerPool.length; i++) {
     eliteMarkerPool[i].ring.visible = false;
     eliteMarkerPool[i].beam.visible = false;
+  }
+}
+
+// Bosses always wear a gold crown marker (ring + beacon) — unlike the
+// on-demand red elite markers, these are on whenever a boss is alive, so
+// the bounty target is never lost in the horde. Same pooling rules as the
+// elite pool: added to `root`, repositioned every frame, survives regens.
+const bossMarkerPool = []; // { ring: Mesh, beam: Sprite }
+
+function ensureBossMarker(i) {
+  while (bossMarkerPool.length <= i) {
+    const ring = new THREE.Mesh(eliteRingGeo, new THREE.MeshBasicMaterial({
+      color: 0xffc23a, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+    }));
+    ring.renderOrder = 995;
+    ring.rotation.x = -Math.PI / 2;
+    ring.visible = false;
+    root.add(ring);
+
+    const beam = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: 0xffd23a, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+    }));
+    beam.renderOrder = 994;
+    beam.visible = false;
+    root.add(beam);
+
+    bossMarkerPool.push({ ring, beam });
+  }
+  return bossMarkerPool[i];
+}
+
+function updateBossMarkers(now) {
+  let count = 0;
+  for (const m of monsters) {
+    if (!m.isBoss) continue;
+    const { ring, beam } = ensureBossMarker(count++);
+    ring.position.set(m.x, m.visualY + 0.05, m.z);
+    ring.rotation.z = -now * 1.4;
+    const pulse = 1 + 0.12 * Math.sin(now * 2.4 + m.phase);
+    ring.scale.setScalar(stackScale(m.stackLevel) * 1.15 * pulse);
+    ring.visible = true;
+
+    beam.position.set(m.x, m.visualY + hpBarOffset(m.stackLevel) + 1.8, m.z);
+    beam.scale.set(0.9, 3.8, 1);
+    beam.material.opacity = 0.7 + 0.15 * Math.sin(now * 2.4 + m.phase);
+    beam.visible = true;
+  }
+  for (let i = count; i < bossMarkerPool.length; i++) {
+    bossMarkerPool[i].ring.visible = false;
+    bossMarkerPool[i].beam.visible = false;
   }
 }
 
@@ -2612,6 +2880,7 @@ function loop() {
     updateMissiles(dt);
     updateFx(dt);
   }
+  updateComboHud(now);
   updateCamera();
   renderer.render(scene, camera);
 }
