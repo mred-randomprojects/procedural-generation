@@ -418,6 +418,9 @@ function updateShip(dt) {
   if (keys.has("KeyD") || keys.has("ArrowRight")) ax += 1;
   if (keys.has("KeyW") || keys.has("ArrowUp")) ay -= 1;
   if (keys.has("KeyS") || keys.has("ArrowDown")) ay += 1;
+  // Virtual joystick (touch) feeds the same screen-space intent as the keys.
+  ax = Math.max(-1, Math.min(1, ax + joy.x));
+  ay = Math.max(-1, Math.min(1, ay + joy.y));
   // screen right = world (+x,-y), screen down = world (+x,+y)
   const k = 38 * dt;
   ship.vx += (ax + ay) * k;
@@ -768,20 +771,66 @@ window.addEventListener("keydown", (e) => {
   if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.code === "KeyR") newWorld(randomSkySeed());
-  if (e.code === "KeyM") muted = !muted;
+  if (e.code === "KeyM") setMuted(!muted);
 });
 window.addEventListener("keyup", (e) => keys.delete(e.code));
 window.addEventListener("blur", () => keys.clear());
 
 skyCanvas.addEventListener("pointermove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
 skyCanvas.addEventListener("pointerdown", (e) => {
+  if (e.pointerType !== "mouse") e.preventDefault(); // taps are shots, not scroll/zoom
   seedInput.blur();
   mouse.x = e.clientX;
   mouse.y = e.clientY;
   fireMissile(lastT / 1000);
 });
+skyCanvas.addEventListener("contextmenu", (e) => e.preventDefault()); // long-press menu on touch
 
 document.getElementById("sky-new").addEventListener("click", () => newWorld(randomSkySeed()));
+
+/* ---------- touch controls: virtual joystick + mute button ---------- */
+
+// Left-thumb joystick (shown by sky.css only on touch devices) flies the
+// ship while the right thumb taps to fire — the joystick is its own element,
+// so its touches never reach the canvas's fire handler.
+const joyEl = document.getElementById("sky-joystick");
+const joyKnob = document.getElementById("sky-joy-knob");
+const joy = { id: null, x: 0, y: 0 };
+
+function setJoy(e) {
+  const r = joyEl.getBoundingClientRect();
+  const max = r.width / 2;
+  let dx = e.clientX - (r.left + max);
+  let dy = e.clientY - (r.top + r.height / 2);
+  const len = Math.hypot(dx, dy);
+  if (len > max) { dx = (dx / len) * max; dy = (dy / len) * max; }
+  joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+  joy.x = dx / max;
+  joy.y = dy / max;
+}
+function resetJoy() {
+  joy.id = null;
+  joy.x = 0;
+  joy.y = 0;
+  joyKnob.style.transform = "translate(0, 0)";
+}
+joyEl.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  joyEl.setPointerCapture(e.pointerId);
+  joy.id = e.pointerId;
+  setJoy(e);
+});
+joyEl.addEventListener("pointermove", (e) => { if (e.pointerId === joy.id) setJoy(e); });
+joyEl.addEventListener("pointerup", (e) => { if (e.pointerId === joy.id) resetJoy(); });
+joyEl.addEventListener("pointercancel", (e) => { if (e.pointerId === joy.id) resetJoy(); });
+
+// Mute toggle button — phones have no M key; also handy with a mouse.
+const muteBtn = document.getElementById("sky-mute");
+function setMuted(v) {
+  muted = v;
+  muteBtn.textContent = muted ? "🔇" : "🔊";
+}
+muteBtn.addEventListener("click", () => setMuted(!muted));
 
 /* ---------- boot ---------- */
 

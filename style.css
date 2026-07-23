@@ -184,3 +184,38 @@ canvas {
   font-variant-numeric: tabular-nums;
   min-height: 18px;
 }
+
+/* ==================== touch & phone support ==================== */
+
+body { -webkit-tap-highlight-color: transparent; }
+button { touch-action: manipulation; }
+/* Paint drags on the WFC canvas are input, never page scroll. */
+#wfc-canvas { touch-action: none; }
+/* Sliders need free horizontal drags on touch. */
+input[type="range"] { touch-action: none; }
+
+@media (any-pointer: coarse) {
+  #seed { font-size: 16px; } /* <16px focus triggers iOS auto-zoom */
+  .tab, .view, #dice, .primary, .tilebtn { min-height: 42px; }
+  input[type="range"] { min-height: 32px; }
+}
+
+/* Phones/narrow windows: canvas on top, controls stacked below, natural
+   page scroll instead of the fixed two-column desktop layout. */
+@media (max-width: 860px) {
+  body { flex-direction: column; }
+  main {
+    order: 1;
+    padding: calc(10px + env(safe-area-inset-top)) 12px 4px;
+    gap: 8px;
+  }
+  #sidebar {
+    order: 2;
+    width: 100%;
+    height: auto;
+    overflow-y: visible;
+    border-right: none;
+    border-top: 1px solid #232c36;
+    padding: 16px 16px calc(28px + env(safe-area-inset-bottom));
+  }
+}

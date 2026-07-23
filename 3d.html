@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1117" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Skylands — Isometric Voxel Archipelago</title>
   <link rel="stylesheet" href="sky.css" />
   <script src="js/noise.js" defer></script>
@@ -25,7 +29,11 @@
   </div>
 
   <div id="hud-hint" class="hud-panel">
-    WASD / arrows — fly &nbsp;·&nbsp; click — missile &nbsp;·&nbsp; R — new world &nbsp;·&nbsp; M — mute
+    <span class="only-fine">WASD / arrows — fly &nbsp;·&nbsp; click — missile &nbsp;·&nbsp; R — new world &nbsp;·&nbsp; M — mute</span>
+    <span class="only-coarse">Joystick — fly &nbsp;·&nbsp; tap — missile</span>
   </div>
+
+  <button id="sky-mute" title="Mute (M)" aria-label="Mute">🔊</button>
+  <div id="sky-joystick"><div id="sky-joy-knob"></div></div>
 </body>
 </html>
