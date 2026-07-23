@@ -712,7 +712,10 @@ function generateWorld(seed, biomeKey) {
   }
 
   scene.background = new THREE.Color(biome.sky[1]);
-  scene.fog = new THREE.Fog(biome.sky[1], 40, 90);
+  // No fog: with bottomless digging, deep crater walls can sit well past any
+  // reasonable fog distance and would fade to sky-white "mist" instead of
+  // staying visible — everything should render solid at all times.
+  scene.fog = null;
 
   // clear any missiles/fx left over from the previous world
   for (const m of missiles) root.remove(m.mesh);
