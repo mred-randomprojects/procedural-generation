@@ -999,20 +999,22 @@ function init() {
   // Ground-projected blast-radius preview that follows the mouse; unit circles
   // scaled per-frame to the current (outer) and core double-damage (inner) radius.
   const circleGeo = new THREE.CircleGeometry(1, 48);
+  // depthTest: false so the preview always paints on top of the terrain
+  // instead of getting hidden behind higher blocks under part of the circle.
   const outerMat = new THREE.MeshBasicMaterial({
-    color: 0xff9a3c, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
+    color: 0xff9a3c, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
+    depthWrite: false, depthTest: false,
   });
   const innerMat = new THREE.MeshBasicMaterial({
-    color: 0xff3b2e, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false,
+    color: 0xff3b2e, transparent: true, opacity: 0.28, side: THREE.DoubleSide,
+    depthWrite: false, depthTest: false,
   });
   aimOuter = new THREE.Mesh(circleGeo, outerMat);
   aimInner = new THREE.Mesh(circleGeo, innerMat);
-  for (const m of [aimOuter, aimInner]) {
-    m.rotation.x = -Math.PI / 2;
-    m.visible = false;
-    m.renderOrder = 1;
-    root.add(m);
-  }
+  aimOuter.visible = aimInner.visible = false;
+  aimOuter.renderOrder = 998;
+  aimInner.renderOrder = 999;
+  root.add(aimOuter, aimInner);
 
   camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 300);
   renderer = new THREE.WebGLRenderer({ antialias: true });
