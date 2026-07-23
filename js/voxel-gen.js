@@ -201,9 +201,13 @@ let lastHeartHitSound = 0; // throttle: a swarm chips the Heart every frame, the
 // tracked separately — XP is a lifetime total that drives blast-radius
 // unlocks and must never decrease, while energy is drained by shop purchases.
 let energy = 0;
-let repairCost = 50, turretCost = 120;
+let repairCost = 50, turretCost = 120, mineCost = 40, slowCost = 80;
 let turrets = []; // { x, z, y, group, head, cooldown }
 let turretBolts = []; // { mesh, target }
+let mines = []; // { x, z, mesh }
+let slowUntil = 0; // seconds (performance.now() clock) the Heart slow-field stays active
+let slowDome = null; // translucent dome visual while the field is up
+const SLOW_RADIUS = 6, SLOW_FACTOR = 0.4, SLOW_DURATION = 15;
 
 function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
@@ -603,9 +607,13 @@ function resetRun() {
   runStartTime = performance.now() / 1000;
   buildHeart(false);
   clearTurrets();
+  clearMines();
+  slowUntil = 0;
   energy = legacy.energyRank * 40; // Head Start legacy perk
   repairCost = 50;
   turretCost = 120;
+  mineCost = 40;
+  slowCost = 80;
   document.getElementById("vx-gameover")?.classList.remove("show");
   document.getElementById("vx-paused")?.classList.remove("show");
   updateHeartHud();
@@ -618,14 +626,16 @@ function resetRun() {
 // Both purchases escalate in price each time so the run stays a resource
 // squeeze: cheap early saves, increasingly costly late-game lifelines.
 function updateShopHud() {
-  const repairBtn = document.getElementById("vx-shop-repair");
-  const turretBtn = document.getElementById("vx-shop-turret");
-  const repairCostEl = document.getElementById("vx-repair-cost");
-  const turretCostEl = document.getElementById("vx-turret-cost");
-  if (repairCostEl) repairCostEl.textContent = `${repairCost}⚡`;
-  if (turretCostEl) turretCostEl.textContent = `${turretCost}⚡`;
-  if (repairBtn) repairBtn.disabled = gameState !== "playing" || energy < repairCost || !heart || heart.hp >= heartMaxHp();
-  if (turretBtn) turretBtn.disabled = gameState !== "playing" || energy < turretCost;
+  const setBtn = (btnId, costId, cost, extraDisabled = false) => {
+    const btn = document.getElementById(btnId);
+    const costEl = document.getElementById(costId);
+    if (costEl) costEl.textContent = `${cost}⚡`;
+    if (btn) btn.disabled = gameState !== "playing" || energy < cost || extraDisabled;
+  };
+  setBtn("vx-shop-repair", "vx-repair-cost", repairCost, !heart || heart.hp >= heartMaxHp());
+  setBtn("vx-shop-turret", "vx-turret-cost", turretCost);
+  setBtn("vx-shop-mine", "vx-mine-cost", mineCost);
+  setBtn("vx-shop-slow", "vx-slow-cost", slowCost, performance.now() / 1000 < slowUntil);
 }
 
 function buyRepair() {
@@ -647,6 +657,95 @@ function buyTurret() {
   if (turrets.length >= 3) unlockAchievement("engineer");
   playPurchase();
   updateScoreHud();
+}
+
+function buyMine() {
+  if (gameState !== "playing" || energy < mineCost) return;
+  energy -= mineCost;
+  mineCost = Math.round(mineCost * 1.3);
+  buildMine();
+  playPurchase();
+  updateScoreHud();
+}
+
+function buySlow() {
+  const now = performance.now() / 1000;
+  if (gameState !== "playing" || energy < slowCost || now < slowUntil) return;
+  energy -= slowCost;
+  slowCost = Math.round(slowCost * 1.5);
+  slowUntil = now + SLOW_DURATION;
+  if (!slowDome && heart) {
+    slowDome = new THREE.Mesh(
+      new THREE.SphereGeometry(SLOW_RADIUS, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshBasicMaterial({
+        color: 0x7fd6ff, transparent: true, opacity: 0.12,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      })
+    );
+    root.add(slowDome);
+  }
+  playPurchase();
+  updateScoreHud();
+}
+
+// Whether a zombie at (x,z) is currently inside an active Heart slow-field.
+function isSlowed(x, z) {
+  if (!heart || performance.now() / 1000 >= slowUntil) return false;
+  return Math.hypot(x - heart.x, z - heart.z) < SLOW_RADIUS;
+}
+
+/* ---------- mines: buried one-shot area denial ---------- */
+
+const MINE_TRIGGER = 1.2, MINE_BLAST = 2.5, MINE_DMG = 3; // flat, armor-ignoring
+
+// Buried on the approach ring (between turret ring and map): random angle,
+// radius 4-7 from the Heart, so a minefield builds up organically.
+function buildMine() {
+  const angle = Math.random() * Math.PI * 2;
+  const ringR = 4 + Math.random() * 3;
+  const x = heart.x + Math.sin(angle) * ringR;
+  const z = heart.z + Math.cos(angle) * ringR;
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.28, 0.34, 0.14, 10),
+    new THREE.MeshLambertMaterial({ color: 0x8a2f26, emissive: 0x3a0f0a })
+  );
+  mesh.position.set(x, heightAt(x, z) + 0.58, z);
+  root.add(mesh);
+  mines.push({ x, z, mesh });
+}
+
+function clearMines() {
+  for (const m of mines) {
+    root.remove(m.mesh);
+    m.mesh.geometry.dispose();
+    m.mesh.material.dispose();
+  }
+  mines = [];
+}
+
+function updateMines() {
+  for (let i = mines.length - 1; i >= 0; i--) {
+    const mine = mines[i];
+    mine.mesh.position.y = heightAt(mine.x, mine.z) + 0.58; // ride terrain edits
+    let triggered = false;
+    for (const m of monsters) {
+      if (Math.hypot(m.x - mine.x, m.z - mine.z) < MINE_TRIGGER) { triggered = true; break; }
+    }
+    if (!triggered) continue;
+    root.remove(mine.mesh);
+    mine.mesh.geometry.dispose();
+    mine.mesh.material.dispose();
+    mines.splice(i, 1);
+    spawnEatFx(mine.x, heightAt(mine.x, mine.z) + 1, mine.z);
+    shake = Math.min(4.5, shake + 0.6);
+    // Flat armor-ignoring area damage; any deaths are player kills.
+    for (let j = monsters.length - 1; j >= 0; j--) {
+      const m = monsters[j];
+      if (Math.hypot(m.x - mine.x, m.z - mine.z) > MINE_BLAST) continue;
+      m.hp -= MINE_DMG;
+      if (m.hp <= 0) killZombieByPlayer(m);
+    }
+  }
 }
 
 /* ---------- turrets: automated defense ---------- */
@@ -1116,8 +1215,9 @@ function updateMonsters(dt, now) {
         }
         m.timer = 1.5 + Math.random() * 2.5;
       }
-      const nx = m.x + Math.sin(m.angle) * m.speed * dt;
-      const nz = m.z + Math.cos(m.angle) * m.speed * dt;
+      const spd = m.speed * (isSlowed(m.x, m.z) ? SLOW_FACTOR : 1);
+      const nx = m.x + Math.sin(m.angle) * spd * dt;
+      const nz = m.z + Math.cos(m.angle) * spd * dt;
       const inBounds = nx > 2 && nx < GRID - 3 && nz > 2 && nz < GRID - 3;
       // Zombies can walk anywhere regardless of elevation — no slope/height gate
       // at all, only actual water (see isWaterAt) and the map edge stop them.
@@ -2228,6 +2328,8 @@ function init() {
   document.getElementById("vx-go-restart").addEventListener("click", () => regenerate(true));
   document.getElementById("vx-shop-repair").addEventListener("click", buyRepair);
   document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
+  document.getElementById("vx-shop-mine").addEventListener("click", buyMine);
+  document.getElementById("vx-shop-slow").addEventListener("click", buySlow);
 
   // Title screen: play, difficulty, settings — controls seeded from the
   // persisted settings so the menu reflects what's actually active.
@@ -2296,8 +2398,19 @@ function loop() {
     updateMonsters(dt * simSpeed, now);
     updateZombieCombat(dt * simSpeed);
     updateTurrets(dt * simSpeed);
+    updateMines();
     processPendingSpawns(now);
     updateWaves(dt * simSpeed);
+    // Slow-field dome: sits on the Heart while active, vanishes after.
+    if (slowDome && heart) {
+      const active = now < slowUntil;
+      if (slowDome.visible && !active) updateShopHud(); // just expired — re-enable the buy button
+      slowDome.visible = active;
+      if (active) {
+        slowDome.position.set(heart.x, heart.y, heart.z);
+        slowDome.material.opacity = 0.08 + 0.05 * Math.sin(now * 3);
+      }
+    }
   } else {
     clickQueue = [];
   }
