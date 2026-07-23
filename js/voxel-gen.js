@@ -54,9 +54,15 @@ const DEPTH_LAYERS = 4; // rendered layers below the surface, deep enough for si
 
 const MONSTER_COUNT = 9;
 const MERGE_DIST = 0.85;
-const MAX_BLAST = 8, STARTING_MAX_BLAST = 3;
-// Cumulative XP needed to unlock each bigger blast radius.
+const STARTING_MAX_BLAST = 3;
+// Cumulative XP needed to unlock each bigger blast radius, up through 8.
 const BLAST_UNLOCK_XP = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
+// No hard ceiling — past 8 the cost keeps escalating indefinitely.
+function blastUnlockCost(r) {
+  if (r <= 8) return BLAST_UNLOCK_XP[r];
+  const extra = r - 8;
+  return 550 + extra * (300 + (extra - 1) * 150);
+}
 const REGEN_DELAY = 6;    // seconds of no explosions before terrain starts healing
 const REGEN_INTERVAL = 0.5; // seconds between regrowth ticks
 
@@ -170,7 +176,7 @@ function spawnMonsters(biome, heights, seed) {
       timer: rand() * 2,
       phase: rand() * Math.PI * 2,
       walkPhase: rand() * Math.PI * 2,
-      hp: 1, elite: false,
+      hp: 1, stackLevel: 1,
       ...initVerticalState(x, z),
     });
   }
@@ -200,15 +206,21 @@ function spawnRandomZombie() {
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
-    hp: 1, elite: false,
+    hp: 1, stackLevel: 1,
     ...initVerticalState(x, z),
   });
 }
 
-// Two regular zombies that wander into each other fuse into one bigger,
-// tougher "elite" zombie that takes two hits to put down.
+const MAX_STACK = 10;
+function stackScale(level) { return 1 + (level - 1) * 0.3; }
+function stackSpeed(level) { return Math.max(0.32, 1.0 - (level - 1) * 0.07); }
+
+// Zombies that wander into each other fuse into one bigger, tougher stacked
+// zombie — each layer adds one required hit and visibly grows it, up to a
+// towering stack of 10.
 function mergeZombies(a, b) {
   const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
+  const level = Math.min(MAX_STACK, a.stackLevel + b.stackLevel);
   monsterGroup.remove(a.rig.root, b.rig.root);
   disposeZombieMaterials(a.mats);
   disposeZombieMaterials(b.mats);
@@ -219,16 +231,16 @@ function mergeZombies(a, b) {
 
   const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
   const rig = createZombieMesh(mats);
-  rig.root.scale.setScalar(1.45);
+  rig.root.scale.setScalar(stackScale(level));
   monsterGroup.add(rig.root);
   monsters.push({
     rig, mats, x: mx, z: mz,
     angle: Math.random() * Math.PI * 2,
-    speed: 0.75 + Math.random() * 0.5,
+    speed: stackSpeed(level) + Math.random() * 0.2,
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
-    hp: 2, elite: true,
+    hp: level, stackLevel: level,
     ...initVerticalState(mx, mz),
   });
 }
@@ -236,10 +248,10 @@ function mergeZombies(a, b) {
 function checkZombieMerges() {
   for (let i = 0; i < monsters.length; i++) {
     const a = monsters[i];
-    if (a.elite) continue;
+    if (a.stackLevel >= MAX_STACK) continue;
     for (let j = i + 1; j < monsters.length; j++) {
       const b = monsters[j];
-      if (b.elite) continue;
+      if (a.stackLevel + b.stackLevel > MAX_STACK) continue;
       if (Math.hypot(a.x - b.x, a.z - b.z) < MERGE_DIST) {
         mergeZombies(a, b);
         return; // arrays mutated — resume scanning next frame
@@ -260,28 +272,21 @@ function updateScoreHud() {
 
   const fillEl = document.getElementById("vx-xp-fill");
   const nextEl = document.getElementById("vx-xp-next");
-  const nextCost = BLAST_UNLOCK_XP[maxUnlockedBlast + 1];
-  if (nextCost === undefined) {
-    if (fillEl) fillEl.style.width = "100%";
-    if (nextEl) nextEl.textContent = "Max blast radius unlocked";
-  } else {
-    const prevCost = BLAST_UNLOCK_XP[maxUnlockedBlast] || 0;
-    const pct = Math.max(0, Math.min(1, (xp - prevCost) / (nextCost - prevCost)));
-    if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
-    if (nextEl) nextEl.textContent = `${xp} / ${nextCost} XP → radius ${maxUnlockedBlast + 1}`;
-  }
+  const nextCost = blastUnlockCost(maxUnlockedBlast + 1);
+  const prevCost = maxUnlockedBlast > STARTING_MAX_BLAST ? blastUnlockCost(maxUnlockedBlast) : 0;
+  const pct = Math.max(0, Math.min(1, (xp - prevCost) / (nextCost - prevCost)));
+  if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
+  if (nextEl) nextEl.textContent = `${xp} / ${nextCost} XP → radius ${maxUnlockedBlast + 1}`;
 }
 
-// Bigger blast radii unlock permanently as you earn more XP. Called any
-// time XP changes; announces each new unlock with an on-screen toast.
+// Bigger blast radii unlock permanently as you earn more XP, with no ceiling —
+// called any time XP changes; announces each new unlock with an on-screen toast.
 function checkBlastUnlocks() {
   let unlocked = false;
-  for (let r = maxUnlockedBlast + 1; r <= MAX_BLAST; r++) {
-    const cost = BLAST_UNLOCK_XP[r];
-    if (cost === undefined || xp < cost) break;
-    maxUnlockedBlast = r;
+  while (xp >= blastUnlockCost(maxUnlockedBlast + 1)) {
+    maxUnlockedBlast++;
     unlocked = true;
-    showToast(`💥 Blast radius ${r} unlocked!`);
+    showToast(`💥 Blast radius ${maxUnlockedBlast} unlocked!`);
   }
   updateScoreHud();
   if (unlocked) updateAimIndicator();
@@ -357,7 +362,7 @@ function killMonstersNear(bx, bz, r) {
     if (d > r + 1) continue;
     m.hp -= d <= coreR ? 2 : 1;
     if (m.hp > 0) {
-      spawnHitFlinch(m); // elite survives a hit — knock it back and flash it
+      spawnHitFlinch(m); // a tall stack survives a hit — knock it back and flash it
       continue;
     }
     monsterGroup.remove(m.rig.root);
@@ -365,7 +370,7 @@ function killMonstersNear(bx, bz, r) {
     spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
     monsters.splice(i, 1);
     kills++;
-    earned += m.elite ? 25 : 10;
+    earned += m.stackLevel * 10;
   }
   if (kills > 0) {
     playZombieKill(kills);
@@ -379,8 +384,8 @@ function killMonstersNear(bx, bz, r) {
   }
 }
 
-// A zombie that survived a hit (elites need two): knock it back from the
-// blast and pop a couple of sparks so the hit still reads as impactful.
+// A zombie that survived a hit (taller stacks need one hit per layer): knock
+// it back from the blast and pop a couple of sparks so it still reads as impactful.
 function spawnHitFlinch(m) {
   const dx = m.x - lastBlastX, dz = m.z - lastBlastZ;
   const d = Math.hypot(dx, dz) || 1;

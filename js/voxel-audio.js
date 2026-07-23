@@ -51,16 +51,79 @@ function darkNoise(c, out, duration, startFreq, endFreq, rampTime, t0, attack, d
   return src;
 }
 
+// Harsh soft-clip curve — deliberately used only by the glitch layer below.
+// (The base boom avoids this on purpose; driven/clipped sines read as bright
+// and metallic, which is exactly the "glitchy and crazy" character we want
+// once the blast radius goes past the old cap.)
+function crushCurve(amount) {
+  const n = 44100;
+  const curve = new Float32Array(n);
+  const deg = Math.PI / 180;
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
+  }
+  return curve;
+}
+
+// Bolted onto the base boom once the blast radius exceeds 8: a stuttering
+// burst of short filtered noise blips, a square-wave siren that jumps
+// randomly between dissonant pitches, and a crackly bitcrushed undertone.
+// Intensity (and how unhinged it sounds) scales with how far past 8 you are.
+function playGlitchLayer(c, master, t0, radius) {
+  const intensity = Math.min(1.6, (radius - 8) * 0.22);
+
+  const stutterCount = 5 + Math.floor(intensity * 7);
+  for (let i = 0; i < stutterCount; i++) {
+    const st = t0 + Math.random() * (0.15 + intensity * 0.4);
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer(c, 0.02 + Math.random() * 0.05);
+    const filt = c.createBiquadFilter();
+    filt.type = Math.random() < 0.5 ? "bandpass" : "highpass";
+    filt.frequency.value = 300 + Math.random() * 4500;
+    filt.Q.value = 4 + Math.random() * 10;
+    const g = envGain(c, master, st, 0.001, 0.02 + Math.random() * 0.06, (0.4 + Math.random() * 0.6) * intensity);
+    src.connect(filt);
+    filt.connect(g);
+    src.start(st);
+  }
+
+  // dissonant pitch-jumping siren — a classic "circuit bent" glitch sound
+  const wob = c.createOscillator();
+  wob.type = "square";
+  const wobGain = envGain(c, master, t0, 0.01, 0.5 + intensity * 0.3, 0.3 * intensity);
+  wob.connect(wobGain);
+  let tt = t0;
+  const steps = 8 + Math.floor(intensity * 6);
+  for (let i = 0; i < steps; i++) {
+    wob.frequency.setValueAtTime(180 + Math.random() * 2200, tt);
+    tt += 0.025 + Math.random() * 0.05;
+  }
+  wob.start(t0);
+  wob.stop(tt);
+
+  // bitcrushed crackle undertone
+  const crackle = c.createBufferSource();
+  crackle.buffer = noiseBuffer(c, 0.35 + intensity * 0.2);
+  const shaper = c.createWaveShaper();
+  shaper.curve = crushCurve(60 + intensity * 40);
+  const crackleGain = envGain(c, master, t0, 0.005, 0.3 + intensity * 0.2, 0.35 * intensity);
+  crackle.connect(shaper);
+  shaper.connect(crackleGain);
+  crackle.start(t0);
+}
+
 // A big, dark, real-explosion boom: a fat sub-bass thump (two detuned low
 // sines, no distortion/waveshaping — that's what was reading as a cymbal)
 // plus a heavily double-filtered noise "whump" body and rumble tail.
-// Scales louder and longer with blast radius.
+// Scales louder and longer with blast radius; past radius 8 it also gets an
+// increasingly glitchy/chaotic layer bolted on top (see playGlitchLayer).
 export function playExplosion(radius = 3) {
   const c = getCtx();
   const t0 = c.currentTime;
-  const scale = Math.min(2.4, 0.9 + radius * 0.16);
+  const scale = Math.min(4.0, 0.9 + radius * 0.16);
   const master = c.createGain();
-  master.gain.value = Math.min(1.7, 1.05 * scale);
+  master.gain.value = Math.min(2.6, 1.05 * scale);
   master.connect(c.destination);
 
   // fat sub-bass thump: two detuned sines for body, no distortion (clean = no shimmer)
@@ -80,6 +143,8 @@ export function playExplosion(radius = 3) {
 
   // low rolling distant rumble tail for the "massive" feel
   darkNoise(c, master, 1.8 * scale, 220, 60, 0.6 * scale, t0 + 0.06, 0.3, 1.6 * scale, 0.6);
+
+  if (radius > 8) playGlitchLayer(c, master, t0, radius);
 }
 
 // A loud, satisfying pop/splat + descending groan + low impact thud for a
