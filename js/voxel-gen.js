@@ -183,8 +183,10 @@ function flushRunStats() {
   const now = performance.now() / 1000;
   // While paused, the pause span hasn't been folded into runStartTime yet.
   const survived = Math.max(0, (gameState === "paused" ? pauseStartedAt : now) - runStartTime);
-  // A run that never really started (no kills, no waves, <10s) isn't a run.
-  if (killCount === 0 && waveNumber === 0 && survived < 10) return;
+  // A run with no kills and no waves never really started — the idle world
+  // behind the title screen must not count as a run (its clock has been
+  // running since page load).
+  if (killCount === 0 && waveNumber === 0) return;
   runStatsFlushed = true;
   lifeStats.runs++;
   lifeStats.kills += killCount;
@@ -798,6 +800,7 @@ function checkContracts() {
     if (!c.done && core.contractDone(c, runCounters)) {
       c.done = true;
       energy += core.CONTRACT_REWARD.energy;
+      if (energy >= 500) unlockAchievement("rich"); // payout can cross the War Chest line
       let msg = `📜 ${c.label} — +${core.CONTRACT_REWARD.energy}⚡`;
       if (mode !== "sandbox") {
         legacy.shards += core.CONTRACT_REWARD.shards;

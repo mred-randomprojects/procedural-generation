@@ -92,7 +92,7 @@ html, body {
 }
 .title-tag { margin: 0 0 12px; color: #9fb0c0; font-size: 14px; }
 .title-how { margin: 0 0 16px; color: #7f93a5; font-size: 12.5px; line-height: 1.6; }
-.title-mode { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; }
+.title-mode { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; flex-wrap: wrap; }
 .mode-btn {
   background: #1d2833;
   color: #b7c4d0;
@@ -926,8 +926,10 @@ input, select { -webkit-user-select: text; user-select: text; }
 }
 
 /* Landscape phones: not enough height for the drawer + board stack — the
-   board collapses and the drawer takes the full height above the shop. */
+   board collapses and the drawer takes the full height above the shop.
+   Contracts would collide with the shop grid too, so they yield. */
 @media (max-height: 520px) {
   body.hud-open #hud-top { bottom: calc(120px + env(safe-area-inset-bottom)); }
   body.hud-open #hud-board { display: none; }
+  #hud-contracts { display: none; }
 }
