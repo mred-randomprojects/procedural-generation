@@ -56,8 +56,8 @@ const MONSTER_COUNT = 9;
 const MAX_MONSTERS = 26;
 const MERGE_DIST = 0.85;
 const MIN_BLAST = 1, MAX_BLAST = 8, STARTING_MAX_BLAST = 3;
-// Money earned (cumulative) needed to unlock each bigger blast radius.
-const BLAST_UNLOCK_COST = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
+// Cumulative XP needed to unlock each bigger blast radius.
+const BLAST_UNLOCK_XP = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
 const REGEN_DELAY = 6;    // seconds of no explosions before terrain starts healing
 const REGEN_INTERVAL = 0.5; // seconds between regrowth ticks
 
@@ -78,7 +78,7 @@ let panHoldTime = 0;
 let blastRadius = 3;
 let maxUnlockedBlast = STARTING_MAX_BLAST;
 let shake = 0;
-let killCount = 0, money = 0;
+let killCount = 0, xp = 0;
 let lastExplosionTime = -999, regenTimer = 0;
 let lastBlastX = 0, lastBlastZ = 0;
 
@@ -89,6 +89,13 @@ function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
   const zi = Math.max(0, Math.min(GRID - 1, Math.round(z)));
   return currentHeights ? currentHeights[zi * GRID + xi] : 0;
+}
+
+// Vertical-movement state for a zombie: instead of snapping to the new block
+// height the instant it crosses a column boundary, it hops there smoothly.
+function initVerticalState(x, z) {
+  const y = heightAt(x, z) + 0.5;
+  return { groundTarget: y, visualY: y, hopFrom: y, hopTo: y, hopT: 1 };
 }
 
 /* ---------- zombies ---------- */
@@ -165,10 +172,11 @@ function spawnMonsters(biome, heights, seed) {
       phase: rand() * Math.PI * 2,
       walkPhase: rand() * Math.PI * 2,
       hp: 1, elite: false,
+      ...initVerticalState(x, z),
     });
   }
   killCount = 0;
-  money = 0;
+  xp = 0;
   maxUnlockedBlast = STARTING_MAX_BLAST;
   setBlastRadius(Math.min(blastRadius, STARTING_MAX_BLAST));
   updateScoreHud();
@@ -196,6 +204,7 @@ function spawnRandomZombie() {
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
     hp: 1, elite: false,
+    ...initVerticalState(x, z),
   });
 }
 
@@ -223,6 +232,7 @@ function mergeZombies(a, b) {
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
     hp: 2, elite: true,
+    ...initVerticalState(mx, mz),
   });
 }
 
@@ -244,23 +254,34 @@ function checkZombieMerges() {
 function updateScoreHud() {
   const killEl = document.getElementById("vx-score-val");
   if (killEl) killEl.textContent = String(killCount);
-  const moneyEl = document.getElementById("vx-money-val");
-  if (moneyEl) moneyEl.textContent = "$" + String(money);
+
+  const xpEl = document.getElementById("vx-xp-val");
+  if (xpEl) xpEl.textContent = String(xp);
+
+  const fillEl = document.getElementById("vx-xp-fill");
+  const nextEl = document.getElementById("vx-xp-next");
+  const nextCost = BLAST_UNLOCK_XP[maxUnlockedBlast + 1];
+  if (nextCost === undefined) {
+    if (fillEl) fillEl.style.width = "100%";
+    if (nextEl) nextEl.textContent = "Max blast radius unlocked";
+  } else {
+    const prevCost = BLAST_UNLOCK_XP[maxUnlockedBlast] || 0;
+    const pct = Math.max(0, Math.min(1, (xp - prevCost) / (nextCost - prevCost)));
+    if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
+    if (nextEl) nextEl.textContent = `${xp} / ${nextCost} XP → radius ${maxUnlockedBlast + 1}`;
+  }
 }
 
-// Bigger blast radii unlock permanently as you earn more money. Called any
-// time money changes; announces each new unlock with an on-screen toast.
+// Bigger blast radii unlock permanently as you earn more XP. Called any
+// time XP changes; announces each new unlock with an on-screen toast.
 function checkBlastUnlocks() {
   for (let r = maxUnlockedBlast + 1; r <= MAX_BLAST; r++) {
-    const cost = BLAST_UNLOCK_COST[r];
-    if (cost === undefined || money < cost) break;
+    const cost = BLAST_UNLOCK_XP[r];
+    if (cost === undefined || xp < cost) break;
     maxUnlockedBlast = r;
     showToast(`💥 Blast radius ${r} unlocked!`);
   }
-  const label = document.getElementById("vx-radius-val");
-  if (label) label.title = maxUnlockedBlast < MAX_BLAST
-    ? `Next radius unlocks at $${BLAST_UNLOCK_COST[maxUnlockedBlast + 1]}`
-    : "Max blast radius unlocked";
+  updateScoreHud();
 }
 
 let toastTimer = null;
@@ -291,9 +312,28 @@ function updateMonsters(dt, now) {
     } else {
       m.angle += Math.PI + (Math.random() - 0.5);
     }
-    const ground = heightAt(m.x, m.z);
-    const bounce = Math.sin(now * 2.2 + m.phase) * 0.04;
-    m.rig.root.position.set(m.x, ground + 0.5 + bounce, m.z);
+    // Smooth step-height changes into a little hop instead of snapping —
+    // climbing up is deliberately slower/floatier than settling back down.
+    const groundTarget = heightAt(m.x, m.z) + 0.5;
+    if (Math.abs(groundTarget - m.groundTarget) > 0.01) {
+      m.hopFrom = m.visualY;
+      m.hopTo = groundTarget;
+      m.hopT = 0;
+      m.groundTarget = groundTarget;
+    }
+    if (m.hopT < 1) {
+      const climbing = m.hopTo > m.hopFrom;
+      const hopDuration = climbing ? 0.55 : 0.25;
+      m.hopT = Math.min(1, m.hopT + dt / hopDuration);
+      const ease = 1 - (1 - m.hopT) * (1 - m.hopT); // ease-out
+      const base = m.hopFrom + (m.hopTo - m.hopFrom) * ease;
+      const arc = Math.sin(m.hopT * Math.PI) * (climbing ? 0.24 : 0.1);
+      m.visualY = base + arc;
+    } else {
+      m.visualY = m.hopTo;
+    }
+    const idleBob = m.hopT >= 1 ? Math.sin(now * 2.2 + m.phase) * 0.04 : 0;
+    m.rig.root.position.set(m.x, m.visualY + idleBob, m.z);
     m.rig.root.rotation.y = m.angle;
 
     if (moving) m.walkPhase += dt * m.speed * 3.2;
@@ -325,7 +365,7 @@ function killMonstersNear(bx, bz, r) {
   if (kills > 0) {
     playZombieKill(kills);
     killCount += kills;
-    money += earned;
+    xp += earned;
     updateScoreHud();
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
@@ -883,8 +923,8 @@ function updateFx(dt) {
 
 function setBlastRadius(r) {
   if (r > maxUnlockedBlast) {
-    const cost = BLAST_UNLOCK_COST[maxUnlockedBlast + 1];
-    if (cost !== undefined) showToast(`🔒 Radius ${maxUnlockedBlast + 1} needs $${cost} (you have $${money})`);
+    const cost = BLAST_UNLOCK_XP[maxUnlockedBlast + 1];
+    if (cost !== undefined) showToast(`🔒 Radius ${maxUnlockedBlast + 1} needs ${cost} XP (you have ${xp})`);
   }
   blastRadius = Math.max(MIN_BLAST, Math.min(maxUnlockedBlast, r));
   const label = document.getElementById("vx-radius-val");
