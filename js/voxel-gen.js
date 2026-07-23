@@ -4,6 +4,10 @@ import {
   playExplosion, playZombieKill, playHeartHit, playWaveStart,
   playGameOver, playPurchase, playTurretShot, setMasterVolume, unlockAudio,
 } from "./voxel-audio.js";
+// All balance curves, progression costs, and game rules live in the pure
+// core module (tested by tests/heartfall-core.test.mjs); this file supplies
+// the live state (slider values, legacy ranks, clocks) at call time.
+import * as core from "./heartfall-core.js";
 
 /* ---------- Biome presets ---------- */
 
@@ -79,15 +83,9 @@ const DEPTH_SPARE = 5;
 // User-chosen slider values are settings, not artificial limits.
 const MONSTER_COUNT = 9;
 const EAT_DIST = 0.85; // how close two zombies must be to fight (see updateZombieCombat)
-const STARTING_MAX_BLAST = 3;
-// Cumulative XP needed to unlock each bigger blast radius, up through 8.
-const BLAST_UNLOCK_XP = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
-// No hard ceiling — past 8 the cost keeps escalating indefinitely.
-function blastUnlockCost(r) {
-  if (r <= 8) return BLAST_UNLOCK_XP[r];
-  const extra = r - 8;
-  return 550 + extra * (300 + (extra - 1) * 150);
-}
+const STARTING_MAX_BLAST = core.STARTING_MAX_BLAST;
+// No hard ceiling — past 8 the cost keeps escalating indefinitely (core).
+const blastUnlockCost = core.blastUnlockCost;
 
 let renderer, scene, camera, root;
 let blockMeshes, blockGeo, water, activeMaterials;
@@ -123,28 +121,23 @@ let highlightGeo, highlightOuterMat, highlightCoreMat, hoverClientX = null, hove
 // Shards are earned every run (scaled by score) and spent on permanent
 // perks from the game-over screen. This is the "one more run" hook: every
 // defeat still banks progress toward stronger future runs.
-let legacy = { shards: 0, heartRank: 0, energyRank: 0, blastRank: 0 };
+let legacy = core.sanitizeLegacy(null);
 function loadLegacy() {
   try {
-    const saved = JSON.parse(localStorage.getItem("vx-legacy") || "{}");
-    for (const k of Object.keys(legacy)) if (typeof saved[k] === "number") legacy[k] = saved[k];
+    legacy = core.sanitizeLegacy(JSON.parse(localStorage.getItem("vx-legacy") || "{}"));
   } catch { /* fresh legacy */ }
 }
 function saveLegacy() {
   try { localStorage.setItem("vx-legacy", JSON.stringify(legacy)); } catch { /* private mode */ }
 }
-function legacyCost(rank) { return 3 + rank * 2; } // shards; grows per rank
+const legacyCost = core.legacyCost; // shards; grows per rank
 loadLegacy();
 
 /* ---------- difficulty, settings, achievements ---------- */
 
 // Difficulty scales the Heart's durability and how fast pressure arrives.
 // Chosen on the title screen; persists across sessions.
-const DIFFICULTIES = {
-  easy: { label: "🌱 Easy", hp: 1.5, wave: 1.35, trickle: 1.4 },
-  normal: { label: "⚔️ Normal", hp: 1, wave: 1, trickle: 1 },
-  hard: { label: "💀 Hard", hp: 0.75, wave: 0.75, trickle: 0.75 },
-};
+const DIFFICULTIES = core.DIFFICULTIES;
 let difficulty = "normal";
 // "ranked" = the scored game: Tweaks are locked to canonical balance and the
 // run banks best-score / achievements / Legacy shards. "sandbox" = free play:
@@ -154,7 +147,7 @@ let difficulty = "normal";
 let mode = "ranked";
 
 function heartMaxHp() {
-  return Math.round((100 + legacy.heartRank * 20) * DIFFICULTIES[difficulty].hp);
+  return core.heartMaxHp(legacy.heartRank, difficulty);
 }
 
 const settings = { volume: 1, shake: true };
@@ -177,17 +170,9 @@ function saveSettings() {
 loadSettings();
 
 // Lightweight local achievements: unlocked once, persisted, announced with a
-// toast. Checked at the moments their stats change, not polled.
-const ACHIEVEMENTS = {
-  "first-blood": "🏆 First Blood — destroy your first zombie",
-  "exterminator": "🏆 Exterminator — 100 kills in one run",
-  "wave-5": "🏆 Holding On — survive to wave 5",
-  "wave-10": "🏆 Unbreakable — survive to wave 10",
-  "evolved-5": "🏆 It's Growing — witness a level 5 zombie",
-  "evolved-10": "🏆 Apex Predator — witness a level 10 zombie",
-  "engineer": "🏆 Engineer — 3 turrets standing at once",
-  "rich": "🏆 War Chest — hold 500 energy",
-};
+// toast. Checked at the moments their stats change, not polled. The table
+// itself lives in core (shared with tests and the Steam bridge).
+const ACHIEVEMENTS = core.ACHIEVEMENTS;
 let unlockedAchievements = {};
 try { unlockedAchievements = JSON.parse(localStorage.getItem("vx-achievements") || "{}"); } catch { /* none */ }
 
@@ -209,7 +194,8 @@ let lastHeartHitSound = 0; // throttle: a swarm chips the Heart every frame, the
 // tracked separately — XP is a lifetime total that drives blast-radius
 // unlocks and must never decrease, while energy is drained by shop purchases.
 let energy = 0;
-let repairCost = 50, turretCost = 120, mineCost = 40, slowCost = 80;
+let repairCost = core.SHOP.repair.base, turretCost = core.SHOP.turret.base,
+  mineCost = core.SHOP.mine.base, slowCost = core.SHOP.slow.base;
 let turrets = []; // { x, z, y, group, head, cooldown }
 let turretBolts = []; // { mesh, target }
 let mines = []; // { x, z, mesh }
@@ -509,24 +495,26 @@ function updateWaves(dt) {
   waveTimer -= dt;
   if (waveTimer <= 0) {
     waveNumber++;
-    waveTimer = Math.max(10, 22 - waveNumber * 0.5) * DIFFICULTIES[difficulty].wave;
-    const count = 2 + waveNumber;
+    waveTimer = core.waveDelay(waveNumber, DIFFICULTIES[difficulty].wave);
+    const count = core.waveSpawnCount(waveNumber);
     for (let i = 0; i < count; i++) spawnRandomZombie(true);
     playWaveStart();
     showToast(`🌊 Wave ${waveNumber} — ${count} invaders!`);
     if (waveNumber >= 5) unlockAchievement("wave-5");
     if (waveNumber >= 10) unlockAchievement("wave-10");
+    if (waveNumber >= 15) unlockAchievement("wave-15");
+    if (waveNumber >= 20) unlockAchievement("wave-20");
     updateHeartHud();
   }
   trickleTimer -= dt;
   if (trickleTimer <= 0) {
-    trickleTimer = Math.max(1.5, 5 - waveNumber * 0.15) * DIFFICULTIES[difficulty].trickle;
+    trickleTimer = core.trickleDelay(waveNumber, DIFFICULTIES[difficulty].trickle);
     spawnRandomZombie(true);
   }
 }
 
 function runScore(survivalSeconds) {
-  return Math.round(survivalSeconds) + killCount * 5;
+  return core.runScore(survivalSeconds, killCount);
 }
 
 function endRun() {
@@ -563,8 +551,9 @@ function endRun() {
       if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
     } catch { /* storage may be unavailable; the run still ends cleanly */ }
 
-    // Bank Legacy shards — every defeat still buys future power.
-    const shardsEarned = Math.max(1, Math.floor(score / 50));
+    // Bank Legacy shards — every defeat still buys future power. Shard
+    // Magnet ranks fatten the payout.
+    const shardsEarned = core.shardsForScore(score, legacy.shardRank);
     legacy.shards += shardsEarned;
     saveLegacy();
 
@@ -581,11 +570,7 @@ function endRun() {
 
 // The permanent-upgrade storefront on the defeat screen. Perks apply from
 // the NEXT run on; buying re-renders in place so shards can be chain-spent.
-const LEGACY_PERKS = [
-  { key: "heartRank", icon: "💪", name: "Reinforced Heart", desc: "+20 max Heart HP" },
-  { key: "energyRank", icon: "⚡", name: "Head Start", desc: "+40 starting energy" },
-  { key: "blastRank", icon: "💥", name: "Demolitionist", desc: "+1 starting blast radius" },
-];
+const LEGACY_PERKS = core.LEGACY_PERKS;
 
 function renderLegacyShop() {
   const el = document.getElementById("vx-legacy-shop");
@@ -608,6 +593,7 @@ function renderLegacyShop() {
       legacy.shards -= cost;
       legacy[perk.key]++;
       saveLegacy();
+      if (core.legacyTotalRanks(legacy) >= 5) unlockAchievement("legacy-5");
       playPurchase();
       renderLegacyShop();
     });
@@ -630,12 +616,14 @@ function resetRun() {
   buildHeart(false);
   clearTurrets();
   clearMines();
+  // Minefield legacy perk: the run opens with a few mines already buried.
+  for (let i = 0; i < core.freeMines(legacy.mineRank); i++) buildMine();
   slowUntil = 0;
   energy = legacy.energyRank * 40; // Head Start legacy perk
-  repairCost = 50;
-  turretCost = 120;
-  mineCost = 40;
-  slowCost = 80;
+  repairCost = core.SHOP.repair.base;
+  turretCost = core.SHOP.turret.base;
+  mineCost = core.SHOP.mine.base;
+  slowCost = core.SHOP.slow.base;
   document.getElementById("vx-gameover")?.classList.remove("show");
   document.getElementById("vx-paused")?.classList.remove("show");
   updateHeartHud();
@@ -663,7 +651,7 @@ function updateShopHud() {
 function buyRepair() {
   if (gameState !== "playing" || energy < repairCost || !heart || heart.hp >= heartMaxHp()) return;
   energy -= repairCost;
-  repairCost = Math.round(repairCost * 1.5);
+  repairCost = core.nextShopCost(repairCost, "repair");
   heart.hp = Math.min(heartMaxHp(), heart.hp + 30);
   playPurchase();
   spawnEatFx(heart.x, heart.y + 1.2, heart.z); // reuse the flash/ring as a "heal burst"
@@ -674,7 +662,7 @@ function buyRepair() {
 function buyTurret() {
   if (gameState !== "playing" || energy < turretCost) return;
   energy -= turretCost;
-  turretCost = Math.round(turretCost * 1.6);
+  turretCost = core.nextShopCost(turretCost, "turret");
   buildTurret();
   if (turrets.length >= 3) unlockAchievement("engineer");
   playPurchase();
@@ -684,7 +672,7 @@ function buyTurret() {
 function buyMine() {
   if (gameState !== "playing" || energy < mineCost) return;
   energy -= mineCost;
-  mineCost = Math.round(mineCost * 1.3);
+  mineCost = core.nextShopCost(mineCost, "mine");
   buildMine();
   playPurchase();
   updateScoreHud();
@@ -694,7 +682,7 @@ function buySlow() {
   const now = performance.now() / 1000;
   if (gameState !== "playing" || energy < slowCost || now < slowUntil) return;
   energy -= slowCost;
-  slowCost = Math.round(slowCost * 1.5);
+  slowCost = core.nextShopCost(slowCost, "slow");
   slowUntil = now + SLOW_DURATION;
   if (!slowDome && heart) {
     slowDome = new THREE.Mesh(
@@ -774,7 +762,9 @@ function updateMines() {
 
 const TURRET_RANGE = 8;
 const TURRET_COOLDOWN = 0.8;
-const TURRET_DMG = 1; // flat, ignores zombie armor — turrets are tech, like blasts
+// Flat, ignores zombie armor — turrets are tech, like blasts. Overcharged
+// Turrets legacy ranks raise it.
+function turretDmg() { return core.turretDamage(legacy.turretRank); }
 
 // Each new turret takes the next slot on a ring around the Heart (golden-
 // angle spacing so any count spreads evenly without overlapping).
@@ -867,7 +857,7 @@ function updateTurrets(dt) {
     const dist = Math.hypot(dx, dy, dz);
     const step = 30 * dt;
     if (dist <= Math.max(0.25, step)) {
-      b.target.hp -= TURRET_DMG;
+      b.target.hp -= turretDmg();
       root.remove(b.mesh);
       b.mesh.geometry.dispose();
       b.mesh.material.dispose();
@@ -905,7 +895,7 @@ function killZombieByPlayer(m) {
   updateZombieBoard();
 }
 
-function stackScale(level) { return 1 + (level - 1) * 0.3; }
+const stackScale = core.stackScale;
 /* ---------- live-tweakable sim knobs (⚙️ Tweaks panel in the HUD) ---------- */
 let spawnsPerKill = 2; // fresh zombies spawned per player blast kill
 let spawnsPerEat = 1; // fresh zombies spawned per zombie eaten by another zombie (0 = the strong thin the herd)
@@ -958,29 +948,15 @@ function applyMode() {
   if (tweaks) tweaks.style.display = sandbox ? "" : "none";
 }
 
-// Max HP and fight-DPS as functions of level, both anchored at 1 for a
-// level-1 zombie and growing by their sliders. Blast damage stays flat
-// (1, 2 in the core), so raising hpPerLevel directly makes high levels
+// Stat curves live in core; these wrappers bind the live Tweaks-slider
+// slopes so every call site stays unchanged. Blast damage stays flat
+// (1, 2 in the core zone), so raising hpPerLevel directly makes high levels
 // harder for the PLAYER to kill, not just for other zombies.
-function maxHpFor(level) { return 1 + (level - 1) * hpPerLevel; }
-function dpsFor(level) { return 1 + (level - 1) * dmgPerLevel; }
-
-// Flat armor against zombie-vs-zombie projectiles: a level-X zombie shrugs
-// off X-2 points of incoming DPS. With default damage (DPS = attacker's
-// level) that means anything more than 2 levels below its target can't
-// scratch it at all — runts simply cannot gang up on an elite. Player
-// blasts ignore defense entirely.
-function defenseFor(level) { return Math.max(0, level - 2); }
-
-// No cap, deliberately — a high-level zombie is hard-won (see
-// eatsNeededForLevel) so it should keep getting faster forever, but linearly:
-// x1 at level 1, +speedPerLevel per level after (an earlier x1.5-compounding
-// curve made high levels comically untrackable).
-function stackSpeed(level) { return 1 + (level - 1) * speedPerLevel; }
-// Odd numbers: 1, 3, 5, 7, ... — how many zombies a zombie at this level must
-// eat to advance to the next level. Escalates faster than a flat rate so
-// early levels come quickly but high levels are a real achievement.
-function eatsNeededForLevel(level) { return 2 * level - 1; }
+function maxHpFor(level) { return core.maxHpFor(level, hpPerLevel); }
+function dpsFor(level) { return core.dpsFor(level, dmgPerLevel); }
+const defenseFor = core.defenseFor;
+function stackSpeed(level) { return core.stackSpeed(level, speedPerLevel); }
+const eatsNeededForLevel = core.eatsNeededForLevel;
 
 const HP_BAR_W = 0.9, HP_BAR_H = 0.13;
 const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
@@ -1041,7 +1017,7 @@ function disposeMonsterUi(m) {
 // atkPerLevel slider). Damage per projectile is scaled by the interval so
 // actual DPS is exactly dpsFor(level) regardless of how fast the shots come
 // — cadence is presentation, the damage sliders control the math.
-function attackInterval(level) { return 1.0 / (1 + atkPerLevel * (level - 1)); }
+function attackInterval(level) { return core.attackInterval(level, atkPerLevel); }
 
 // Any two zombies that wander close enough fight it out — no same-level
 // restriction. Fighters STOP moving, square up face to face, and lob
@@ -1132,7 +1108,7 @@ function updateZombieProjectiles(dt) {
       // terms — an attacker whose DPS doesn't clear it deals nothing),
       // then resolve a possible kill. The Heart's stackLevel of 1 gives it
       // zero armor, so every zombie always chips it.
-      const effDmg = Math.max(0, (p.dps - defenseFor(p.target.stackLevel)) * p.interval);
+      const effDmg = core.effectiveHitDamage(p.dps, p.interval, p.target.stackLevel);
       root.remove(p.mesh);
       p.mesh.geometry.dispose();
       p.mesh.material.dispose();
@@ -1497,13 +1473,7 @@ function buildHeightmap(seed, biome) {
 // height — so a block newly exposed at the bottom of a deep hole still shows
 // (and resists like) whatever it truly is, not the grass/dirt cap that's long
 // gone. Resistance is in hit-points; see applyDamage.
-function stratumForDepth(depth) {
-  if (depth <= 1) return { type: "sub", resistance: 1 };
-  if (depth <= 4) return { type: "rock", resistance: 3 };
-  if (depth <= 9) return { type: "ironstone", resistance: 6 };
-  if (depth <= 19) return { type: "deepstone", resistance: 10 };
-  return { type: "bedrock", resistance: 18 };
-}
+const stratumForDepth = core.stratumForDepth;
 
 function stratumAt(biome, y, originalHeight) {
   const depth = originalHeight - y;

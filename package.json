@@ -1,0 +1,10 @@
+{
+  "name": "procedural-generation",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Procedural worlds demos + Heartfall, the voxel Heart-defense game",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/"
+  }
+}
