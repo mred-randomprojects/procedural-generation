@@ -966,9 +966,11 @@ function hideAllEliteMarkers() {
 
 function updateEliteMarkers(now) {
   if (!locateEliteOn || monsters.length === 0) { hideAllEliteMarkers(); return; }
+  // Highlight every zombie tied for the current max level — even when that
+  // max is 1 (everyone highlighted): the button means "show me the top", and
+  // showing nothing when nobody has leveled up yet reads as broken.
   let maxLevel = 1;
   for (const m of monsters) if (m.stackLevel > maxLevel) maxLevel = m.stackLevel;
-  if (maxLevel <= 1) { hideAllEliteMarkers(); return; } // nobody stands out yet
   let count = 0;
   for (const m of monsters) {
     if (m.stackLevel !== maxLevel) continue;
