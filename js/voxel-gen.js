@@ -55,7 +55,9 @@ const DEPTH_LAYERS = 4; // rendered layers below the surface, deep enough for si
 const MONSTER_COUNT = 9;
 const MAX_MONSTERS = 26;
 const MERGE_DIST = 0.85;
-const MIN_BLAST = 1, MAX_BLAST = 8;
+const MIN_BLAST = 1, MAX_BLAST = 8, STARTING_MAX_BLAST = 3;
+// Money earned (cumulative) needed to unlock each bigger blast radius.
+const BLAST_UNLOCK_COST = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
 const REGEN_DELAY = 6;    // seconds of no explosions before terrain starts healing
 const REGEN_INTERVAL = 0.5; // seconds between regrowth ticks
 
@@ -74,6 +76,7 @@ let currentSeed = "terra", monsterIdCounter = 0;
 let lastTime = 0;
 let panHoldTime = 0;
 let blastRadius = 3;
+let maxUnlockedBlast = STARTING_MAX_BLAST;
 let shake = 0;
 let killCount = 0, money = 0;
 let lastExplosionTime = -999, regenTimer = 0;
@@ -166,6 +169,8 @@ function spawnMonsters(biome, heights, seed) {
   }
   killCount = 0;
   money = 0;
+  maxUnlockedBlast = STARTING_MAX_BLAST;
+  setBlastRadius(Math.min(blastRadius, STARTING_MAX_BLAST));
   updateScoreHud();
 }
 
@@ -243,6 +248,31 @@ function updateScoreHud() {
   if (moneyEl) moneyEl.textContent = "$" + String(money);
 }
 
+// Bigger blast radii unlock permanently as you earn more money. Called any
+// time money changes; announces each new unlock with an on-screen toast.
+function checkBlastUnlocks() {
+  for (let r = maxUnlockedBlast + 1; r <= MAX_BLAST; r++) {
+    const cost = BLAST_UNLOCK_COST[r];
+    if (cost === undefined || money < cost) break;
+    maxUnlockedBlast = r;
+    showToast(`💥 Blast radius ${r} unlocked!`);
+  }
+  const label = document.getElementById("vx-radius-val");
+  if (label) label.title = maxUnlockedBlast < MAX_BLAST
+    ? `Next radius unlocks at $${BLAST_UNLOCK_COST[maxUnlockedBlast + 1]}`
+    : "Max blast radius unlocked";
+}
+
+let toastTimer = null;
+function showToast(text) {
+  const el = document.getElementById("vx-toast");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
 function updateMonsters(dt, now) {
   for (const m of monsters) {
     m.timer -= dt;
@@ -293,10 +323,12 @@ function killMonstersNear(bx, bz, r) {
     earned += m.elite ? 25 : 10;
   }
   if (kills > 0) {
-    playZombieKill();
+    playZombieKill(kills);
     killCount += kills;
     money += earned;
     updateScoreHud();
+    checkBlastUnlocks();
+    if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
     let toSpawn = kills * 2;
     while (toSpawn-- > 0) spawnRandomZombie();
   }
@@ -345,6 +377,35 @@ function spawnMergeFx(x, y, z) {
   flash.position.set(x, y, z);
   root.add(flash);
   fx.push({ type: "fireball", obj: flash, age: 0, life: 0.35, maxR: 2.4 });
+}
+
+// A big floating "×N" combo callout for multi-kill blasts, drawn to a canvas
+// texture and shown on a camera-facing sprite so it always reads clearly.
+function spawnKillStreakPopup(x, y, z, count) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  const label = `×${count}`;
+  ctx.font = "900 92px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 12;
+  ctx.strokeStyle = "rgba(10,5,0,0.9)";
+  ctx.strokeText(label, 128, 66);
+  const hue = count >= 6 ? "#ff3b3b" : count >= 4 ? "#ff9c3b" : "#ffd23b";
+  ctx.fillStyle = hue;
+  ctx.fillText(label, 128, 66);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  const baseScale = 1.6 + Math.min(1.8, count * 0.15);
+  sprite.scale.set(baseScale * 2, baseScale, 1);
+  sprite.position.set(x, y, z);
+  root.add(sprite);
+  fx.push({ type: "killtext", obj: sprite, age: 0, life: 1.4, baseScale });
 }
 
 /* ---------- terrain generation ---------- */
@@ -749,6 +810,7 @@ function updateFx(dt) {
     if (t >= 1) {
       root.remove(p.obj);
       p.obj.geometry?.dispose?.();
+      p.obj.material?.map?.dispose?.();
       p.obj.material?.dispose?.();
       fx.splice(i, 1);
       continue;
@@ -807,12 +869,24 @@ function updateFx(dt) {
         p.obj.scale.setScalar(1 + t);
         break;
       }
+      case "killtext": {
+        p.obj.position.y += 1.3 * dt;
+        const popIn = Math.min(1, p.age / 0.15);
+        const s = p.baseScale * (0.4 + 0.6 * popIn);
+        p.obj.scale.set(s * 2, s, 1);
+        p.obj.material.opacity = t > 0.55 ? 1 - (t - 0.55) / 0.45 : 1;
+        break;
+      }
     }
   }
 }
 
 function setBlastRadius(r) {
-  blastRadius = Math.max(MIN_BLAST, Math.min(MAX_BLAST, r));
+  if (r > maxUnlockedBlast) {
+    const cost = BLAST_UNLOCK_COST[maxUnlockedBlast + 1];
+    if (cost !== undefined) showToast(`🔒 Radius ${maxUnlockedBlast + 1} needs $${cost} (you have $${money})`);
+  }
+  blastRadius = Math.max(MIN_BLAST, Math.min(maxUnlockedBlast, r));
   const label = document.getElementById("vx-radius-val");
   if (label) label.textContent = String(blastRadius);
 }

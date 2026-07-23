@@ -82,23 +82,35 @@ export function playExplosion(radius = 3) {
   darkNoise(c, master, 1.8 * scale, 220, 60, 0.6 * scale, t0 + 0.06, 0.3, 1.6 * scale, 0.6);
 }
 
-// A satisfying pop/splat + descending groan for a zombie kill.
-export function playZombieKill() {
+// A loud, satisfying pop/splat + descending groan + low impact thud for a
+// zombie kill. Gets a little louder/beefier for multi-kills (count > 1).
+export function playZombieKill(count = 1) {
   const c = getCtx();
   const t0 = c.currentTime;
+  const boost = Math.min(1.5, 1 + (count - 1) * 0.14);
   const master = c.createGain();
-  master.gain.value = 0.8;
+  master.gain.value = Math.min(2.2, 1.5 * boost);
   master.connect(c.destination);
+
+  // low impact thud so the kill has real weight, not just a splat
+  const thud = c.createOscillator();
+  thud.type = "sine";
+  thud.frequency.setValueAtTime(150, t0);
+  thud.frequency.exponentialRampToValueAtTime(45, t0 + 0.16);
+  const thudGain = envGain(c, master, t0, 0.004, 0.22, 1.0 * boost);
+  thud.connect(thudGain);
+  thud.start(t0);
+  thud.stop(t0 + 0.3);
 
   // wet splat: bandpassed noise burst
   const splat = c.createBufferSource();
-  splat.buffer = noiseBuffer(c, 0.16);
+  splat.buffer = noiseBuffer(c, 0.18);
   const splatFilter = c.createBiquadFilter();
   splatFilter.type = "bandpass";
   splatFilter.frequency.setValueAtTime(1400, t0);
   splatFilter.frequency.exponentialRampToValueAtTime(220, t0 + 0.14);
   splatFilter.Q.value = 1.4;
-  const splatGain = envGain(c, master, t0, 0.003, 0.16, 0.9);
+  const splatGain = envGain(c, master, t0, 0.003, 0.18, 1.2);
   splat.connect(splatFilter);
   splatFilter.connect(splatGain);
   splat.start(t0);
@@ -111,7 +123,7 @@ export function playZombieKill() {
   const groanFilter = c.createBiquadFilter();
   groanFilter.type = "lowpass";
   groanFilter.frequency.value = 900;
-  const groanGain = envGain(c, master, t0 + 0.02, 0.02, 0.3, 0.35);
+  const groanGain = envGain(c, master, t0 + 0.02, 0.02, 0.3, 0.5);
   groan.connect(groanFilter);
   groanFilter.connect(groanGain);
   groan.start(t0 + 0.02);
@@ -122,7 +134,7 @@ export function playZombieKill() {
   ding.type = "triangle";
   ding.frequency.setValueAtTime(900, t0 + 0.1);
   ding.frequency.exponentialRampToValueAtTime(1500, t0 + 0.22);
-  const dingGain = envGain(c, master, t0 + 0.1, 0.01, 0.22, 0.25);
+  const dingGain = envGain(c, master, t0 + 0.1, 0.01, 0.22, 0.35);
   ding.connect(dingGain);
   ding.start(t0 + 0.1);
   ding.stop(t0 + 0.34);

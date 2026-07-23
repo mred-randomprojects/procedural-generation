@@ -151,3 +151,29 @@ html, body {
   color: #b7c4d0;
   white-space: nowrap;
 }
+
+#vx-toast {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  transform: translate(-50%, -14px);
+  padding: 10px 20px;
+  border-radius: 10px;
+  background: rgba(20, 15, 5, 0.75);
+  border: 1px solid rgba(255, 190, 90, 0.5);
+  color: #ffd88a;
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 0 22px rgba(255, 170, 60, 0.25);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+#vx-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
