@@ -53,7 +53,6 @@ const GRID = 44;
 const DEPTH_LAYERS = 4; // rendered layers below the surface, deep enough for side views
 
 const MONSTER_COUNT = 9;
-const MAX_MONSTERS = 26;
 const MERGE_DIST = 0.85;
 const MAX_BLAST = 8, STARTING_MAX_BLAST = 3;
 // Cumulative XP needed to unlock each bigger blast radius.
@@ -183,7 +182,6 @@ function spawnMonsters(biome, heights, seed) {
 
 // Spawns one fresh zombie at a random valid spot — used to replace a killed one.
 function spawnRandomZombie() {
-  if (monsters.length >= MAX_MONSTERS) return;
   const biome = currentBiome;
   let x = GRID / 2, z = GRID / 2, h;
   for (let tries = 0; tries < 30; tries++) {
