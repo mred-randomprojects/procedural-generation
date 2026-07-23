@@ -318,15 +318,19 @@ const BEDROCK_BASE = 0x1c1e26;
 //
 // Every variant shares the SAME base color — texture variants here only exist
 // to vary the pebble/crack/vein *pattern* a little. Color richness instead
-// comes from a continuous per-instance tint (see applyTerrainTint in
-// voxel-gen.js) driven by smooth noise over world position, so neighboring
-// blocks blend into patches and streaks instead of each one reading as its
-// own separately-dyed swatch. vertexColors is on so that tint can multiply in.
+// comes from a continuous per-instance tint (see terrainTint in voxel-gen.js)
+// driven by smooth noise over world position, so neighboring blocks blend
+// into patches and streaks instead of each one reading as its own
+// separately-dyed swatch. That tint is set via InstancedMesh.setColorAt,
+// which Three.js multiplies in automatically for instanced meshes — do NOT
+// add `vertexColors: true` here, that flag instead asks for a per-VERTEX
+// color attribute on the (colorless) shared block geometry, which reads as
+// black and blacks out the whole texture.
 export function buildBlockMaterials(biome, seed) {
   const materials = {}; // type -> variant[] -> stage[] (or array-of-6 for grass)
   const seedFor = (type, variant) => `${seed}:tex:${type}:${variant}`;
   const single = (mat) => [mat]; // wraps a one-stage material to match the staged shape
-  const tinted = (opts) => new THREE.MeshLambertMaterial({ ...opts, vertexColors: true });
+  const tinted = (opts) => new THREE.MeshLambertMaterial(opts);
 
   materials.sub = [];
   for (let v = 0; v < VARIANT_COUNTS.sub; v++) {
