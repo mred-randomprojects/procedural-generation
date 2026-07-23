@@ -662,7 +662,10 @@ function rebuildBlockMeshes() {
       const bottom = globalBottom; // same for every column — see comment above
       for (let y = height; y >= bottom; y--) {
         let type = stratumAt(biome, y, originalHeight).type;
-        if (y === height && scorched[idx]) type = "charred";
+        // Char is a surface scorch mark from the blast, not a permanent stain on
+        // the column — once digging exposes real rock strata below the original
+        // topsoil, show that rock/deepstone/bedrock instead of hiding it under black.
+        if (y === height && scorched[idx] && originalHeight - y <= 1) type = "charred";
         const variant = Math.floor(cellHash(x + y * 97, z) * variantCounts[type]);
         const key = `${type}:${variant}`;
         let list = buckets.get(key);
