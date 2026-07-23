@@ -165,6 +165,18 @@ html, body {
   white-space: nowrap;
 }
 
+#hud-version {
+  position: absolute;
+  bottom: 10px;
+  right: 14px;
+  font-size: 10.5px;
+  color: rgba(159, 176, 192, 0.55);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+  user-select: text;
+}
+
 #hud-board {
   top: 150px;
   right: 14px;
