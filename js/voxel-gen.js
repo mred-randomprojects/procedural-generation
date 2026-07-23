@@ -64,17 +64,16 @@ const DEPTH_SPARE = 5;
 
 // GUIDING PRINCIPLE — no artificial limits. This game is more fun for humans
 // when systems are left uncapped, even when a limit seems "reasonable" or
-// prudent. The zombie population is the canonical example: every kill spawns
-// 2 new zombies (see killMonstersNear) with NO cap on monsters.length, ever.
-// MONSTER_COUNT below is only the *initial* spawn count at world-gen time —
-// it is not a ceiling. Do not add a cap here (or a general population cap
-// anywhere else in this file) without explicit user direction; if a limit
-// starts to feel necessary for performance, raise it with the user rather
-// than silently capping. Zombies that meet fight via resolveZombieKill()
-// — the loser dies but is immediately replaced elsewhere (see spawnRandomZombie
-// in resolveZombieKill), so this is population-neutral: total count is driven ONLY by
-// player kills (net +1 per kill, since 1 dies and 2 spawn), never by zombies
-// eating each other.
+// prudent. There is NO cap on monsters.length, ever. MONSTER_COUNT below is
+// only the *initial* spawn count at world-gen time — it is not a ceiling. Do
+// not add a cap here (or a general population cap anywhere else in this
+// file) without explicit user direction; if a limit starts to feel necessary
+// for performance, raise it with the user rather than silently capping.
+// Population flows are all user-tweakable sliders (⚙️ Tweaks panel):
+// spawnsPerKill fresh zombies per player blast kill (default 2), and
+// spawnsPerEat per zombie eaten by another zombie via resolveZombieKill()
+// (default 1 = eats are population-neutral; 0 = the strong thin the herd).
+// User-chosen slider values are settings, not artificial limits.
 const MONSTER_COUNT = 9;
 const EAT_DIST = 0.85; // how close two zombies must be to fight (see updateZombieCombat)
 const STARTING_MAX_BLAST = 3;
@@ -250,16 +249,15 @@ function spawnRandomZombie() {
   updateZombieBoard();
 }
 
-// Replacement spawns go through this queue instead of appearing instantly, so
-// the HUD "Respawn" control can delay them — or, on "off", stop production
-// entirely (queued and future spawns are simply dropped), which starves the
-// map of fresh level 1s and lets the big zombies' dominance actually play out
-// instead of being endlessly diluted.
-let spawnDelay = 0; // seconds; Infinity = production stopped
+// Replacement spawns go through this queue instead of appearing instantly,
+// so the HUD "Respawn delay" slider can hold them back. To stop production
+// entirely, set the "Spawns per blast kill" and "Spawns per eaten" sliders
+// to 0 — then nothing gets queued in the first place, which starves the map
+// of fresh level 1s and lets the big zombies' dominance actually play out.
+let spawnDelay = 0; // seconds
 let pendingSpawns = []; // due-timestamps (seconds, performance.now() clock)
 
 function queueZombieSpawn() {
-  if (!isFinite(spawnDelay)) return;
   if (spawnDelay <= 0) { spawnRandomZombie(); return; }
   pendingSpawns.push(performance.now() / 1000 + spawnDelay);
 }
@@ -275,6 +273,7 @@ function processPendingSpawns(now) {
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
 /* ---------- live-tweakable sim knobs (⚙️ Tweaks panel in the HUD) ---------- */
 let spawnsPerKill = 2; // fresh zombies spawned per player blast kill
+let spawnsPerEat = 1; // fresh zombies spawned per zombie eaten by another zombie (0 = the strong thin the herd)
 let speedPerLevel = 0.3; // extra speed a zombie gains per level past 1
 let simSpeed = 1; // time multiplier for the zombie sim (movement + combat), not the player's missiles
 
@@ -452,9 +451,10 @@ function resolveZombieKill(killer, loser) {
   spawnEatFx(lx, heightAt(lx, lz) + 1, lz);
   spawnGibs(lx, heightAt(lx, lz) + 0.9, lz);
 
-  // Replace the loser 1-for-1 so this encounter is population-neutral
-  // (subject to the HUD Respawn delay/off control).
-  queueZombieSpawn();
+  // Replacement spawns — default 1-for-1 keeps eats population-neutral, but
+  // it's a tweakable: 0 lets the strong actually thin the herd, higher
+  // values make eating feed the swarm.
+  for (let s = 0; s < spawnsPerEat; s++) queueZombieSpawn();
 
   // The killer may itself have died from a crossing projectile in the same
   // instant — a corpse doesn't eat, so the XP just goes unclaimed.
@@ -1586,24 +1586,27 @@ function init() {
     if (!locateEliteOn) hideAllEliteMarkers();
   });
 
-  document.getElementById("vx-spawn-delay").addEventListener("change", (e) => {
-    const v = e.target.value;
-    spawnDelay = v === "off" ? Infinity : Number(v);
-    if (!isFinite(spawnDelay)) pendingSpawns = []; // turning production off also drops what's queued
-  });
-
-  document.getElementById("vx-spawn-per-kill").addEventListener("change", (e) => {
-    spawnsPerKill = Number(e.target.value);
-  });
-  document.getElementById("vx-speed-per-level").addEventListener("change", (e) => {
-    speedPerLevel = Number(e.target.value);
+  // Tweaks sliders: `input` (not `change`) so values apply live while
+  // dragging, each mirrored into its readout label.
+  const bindSlider = (id, format, apply) => {
+    const el = document.getElementById(id);
+    const label = document.getElementById(id + "-val");
+    el.addEventListener("input", () => {
+      const v = Number(el.value);
+      label.textContent = format(v);
+      apply(v);
+    });
+  };
+  bindSlider("vx-spawn-per-kill", (v) => String(v), (v) => { spawnsPerKill = v; });
+  bindSlider("vx-spawn-per-eat", (v) => String(v), (v) => { spawnsPerEat = v; });
+  bindSlider("vx-spawn-delay", (v) => String(v), (v) => { spawnDelay = v; });
+  bindSlider("vx-speed-per-level", (v) => v.toFixed(2), (v) => {
+    speedPerLevel = v;
     // Re-derive every living zombie's speed from its level so the new slope
     // applies immediately, not just to future spawns/level-ups.
     for (const m of monsters) m.speed = stackSpeed(m.stackLevel) + Math.random() * 0.2;
   });
-  document.getElementById("vx-sim-speed").addEventListener("change", (e) => {
-    simSpeed = Number(e.target.value);
-  });
+  bindSlider("vx-sim-speed", (v) => v.toFixed(1), (v) => { simSpeed = v; });
   document.getElementById("vx-spawn-one").addEventListener("click", () => spawnRandomZombie());
   document.getElementById("vx-new-terrain").addEventListener("click", () => {
     const seedInput2 = document.getElementById("vx-seed");
