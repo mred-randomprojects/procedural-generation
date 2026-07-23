@@ -169,8 +169,14 @@ html, body {
   position: absolute;
   bottom: 10px;
   right: 14px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(13, 17, 23, 0.55);
+  border: 1px solid rgba(80, 100, 120, 0.35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   font-size: 10.5px;
-  color: rgba(159, 176, 192, 0.55);
+  color: rgba(230, 235, 241, 0.75);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.2px;
   pointer-events: none;
