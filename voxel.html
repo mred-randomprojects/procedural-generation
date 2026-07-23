@@ -48,6 +48,7 @@
       </p>
       <div class="title-mode">
         <button class="mode-btn active" data-mode="ranked">🏆 Ranked</button>
+        <button class="mode-btn" data-mode="daily">📅 Daily</button>
         <button class="mode-btn" data-mode="sandbox">🧪 Sandbox</button>
       </div>
       <p class="title-mode-note" id="vx-mode-note">Best score, achievements &amp; shards are saved.</p>
@@ -62,6 +63,12 @@
       </div>
       <button id="vx-title-play">▶ Defend the Heart</button>
       <div class="title-meta" id="vx-title-meta"></div>
+      <div class="title-extra">
+        <button id="vx-stats-btn">📊 Stats</button>
+        <button id="vx-ach-btn">🏆 Achievements</button>
+      </div>
+      <div id="vx-stats-panel" class="title-subpanel"></div>
+      <div id="vx-ach-panel" class="title-subpanel"></div>
     </div>
   </div>
 
@@ -88,6 +95,7 @@
 
   <div id="hud-score" class="hud-panel">
     <div id="vx-sandbox-note">🧪 Sandbox — not saved</div>
+    <div id="vx-daily-note">📅 Daily Challenge</div>
     <div class="hud-score-row">
       <span class="hud-label">🧟 Zombies killed</span>
       <span id="vx-score-val">0</span>

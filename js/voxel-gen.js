@@ -137,15 +137,67 @@ loadLegacy();
 /* ---------- difficulty, settings, achievements ---------- */
 
 // Difficulty scales the Heart's durability and how fast pressure arrives.
-// Chosen on the title screen; persists across sessions.
+// Chosen on the title screen; persists across sessions. `difficulty` is the
+// EFFECTIVE difficulty of the current run; `chosenDifficulty` is the user's
+// persisted preference — they differ only in Daily mode, which forces
+// "normal" so every day's board is a level playing field.
 const DIFFICULTIES = core.DIFFICULTIES;
 let difficulty = "normal";
+let chosenDifficulty = "normal";
 // "ranked" = the scored game: Tweaks are locked to canonical balance and the
-// run banks best-score / achievements / Legacy shards. "sandbox" = free play:
-// every Tweak is unlocked but NOTHING is saved. Chosen on the title screen,
+// run banks best-score / achievements / Legacy shards. "daily" = ranked
+// rules on the one fixed world all players share that day (UTC), with its
+// own per-day scoreboard and a play streak. "sandbox" = free play: every
+// Tweak is unlocked but NOTHING is saved. Chosen on the title screen,
 // persisted across sessions. This is the wall that stops a doctored run from
 // laundering easy progress into permanent meta-progression.
 let mode = "ranked";
+
+/* ---------- daily challenge state ---------- */
+let daily = core.sanitizeDaily(null);
+function loadDaily() {
+  try { daily = core.sanitizeDaily(JSON.parse(localStorage.getItem("vx-daily") || "{}")); } catch { /* fresh */ }
+}
+function saveDaily() {
+  try { localStorage.setItem("vx-daily", JSON.stringify(daily)); } catch { /* private mode */ }
+}
+loadDaily();
+function todayStr() { return core.dayString(new Date()); }
+
+/* ---------- lifetime stats ---------- */
+let lifeStats = core.sanitizeStats(null);
+function loadStats() {
+  try { lifeStats = core.sanitizeStats(JSON.parse(localStorage.getItem("vx-stats") || "{}")); } catch { /* fresh */ }
+}
+function saveStats() {
+  try { localStorage.setItem("vx-stats", JSON.stringify(lifeStats)); } catch { /* private mode */ }
+}
+loadStats();
+
+// Fold the finished (or abandoned) run into the lifetime stats — called on
+// defeat AND on quitting to the title, guarded so a run never double-counts
+// and sandbox runs never count at all.
+let runStatsFlushed = false;
+function flushRunStats() {
+  if (runStatsFlushed || mode === "sandbox") return;
+  const now = performance.now() / 1000;
+  // While paused, the pause span hasn't been folded into runStartTime yet.
+  const survived = Math.max(0, (gameState === "paused" ? pauseStartedAt : now) - runStartTime);
+  // A run that never really started (no kills, no waves, <10s) isn't a run.
+  if (killCount === 0 && waveNumber === 0 && survived < 10) return;
+  runStatsFlushed = true;
+  lifeStats.runs++;
+  lifeStats.kills += killCount;
+  lifeStats.bosses += bossesKilledThisRun;
+  lifeStats.totalWaves += waveNumber;
+  if (waveNumber > lifeStats.bestWave) lifeStats.bestWave = waveNumber;
+  lifeStats.timePlayed += survived;
+  if (mode === "daily") lifeStats.dailies++;
+  lifeStats.contractsDone += contracts.filter((c) => c.done).length;
+  if (runMaxCombo > lifeStats.bestCombo) lifeStats.bestCombo = runMaxCombo;
+  saveStats();
+  if (lifeStats.kills >= 1000) unlockAchievement("kills-1000");
+}
 
 function heartMaxHp() {
   return core.heartMaxHp(legacy.heartRank, difficulty);
@@ -158,14 +210,15 @@ function loadSettings() {
     const saved = JSON.parse(localStorage.getItem("vx-settings") || "{}");
     if (typeof saved.volume === "number") settings.volume = saved.volume;
     if (typeof saved.shake === "boolean") settings.shake = saved.shake;
-    if (DIFFICULTIES[saved.difficulty]) difficulty = saved.difficulty;
-    if (saved.mode === "ranked" || saved.mode === "sandbox") mode = saved.mode;
+    if (DIFFICULTIES[saved.difficulty]) chosenDifficulty = saved.difficulty;
+    if (saved.mode === "ranked" || saved.mode === "sandbox" || saved.mode === "daily") mode = saved.mode;
   } catch { /* defaults */ }
+  difficulty = chosenDifficulty;
   setMasterVolume(settings.volume);
 }
 function saveSettings() {
   try {
-    localStorage.setItem("vx-settings", JSON.stringify({ ...settings, difficulty, mode }));
+    localStorage.setItem("vx-settings", JSON.stringify({ ...settings, difficulty: chosenDifficulty, mode }));
   } catch { /* private mode */ }
 }
 loadSettings();
@@ -639,17 +692,31 @@ function endRun() {
     `Best combo: <b>×${runMaxCombo}</b> · Bosses slain: <b>${bossesKilledThisRun}</b> · ` +
     `Contracts: <b>${contractsDone}/3</b> · Closest call: <b>${closest}</b>`;
 
+  flushRunStats();
+
   if (mode === "sandbox") {
     // Free play banks nothing: no best-score, no shards, no Legacy shop.
     if (stats) stats.innerHTML = `${line1}<br><span class="go-sandbox">🧪 Sandbox run — nothing saved</span>`;
     const shop = document.getElementById("vx-legacy-shop");
     if (shop) shop.innerHTML = "";
   } else {
-    let best = 0;
-    try {
-      best = Number(localStorage.getItem("vx-best-score") || 0);
-      if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
-    } catch { /* storage may be unavailable; the run still ends cleanly */ }
+    // Ranked and Daily both bank shards + achievements; they differ only in
+    // which scoreboard the run posts to.
+    let scoreLine;
+    if (mode === "daily") {
+      daily = core.recordDailyScore(daily, todayStr(), score);
+      saveDaily();
+      scoreLine =
+        `Score: <b>${score}</b> · <span class="go-best">Today's best: ${daily.todayBest}</span>` +
+        ` · 🔥 <b>${daily.streak}</b>-day streak`;
+    } else {
+      let best = 0;
+      try {
+        best = Number(localStorage.getItem("vx-best-score") || 0);
+        if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
+      } catch { /* storage may be unavailable; the run still ends cleanly */ }
+      scoreLine = `Score: <b>${score}</b> · <span class="go-best">Best: ${best}</span>`;
+    }
 
     // Bank Legacy shards — every defeat still buys future power. Shard
     // Magnet ranks fatten the payout.
@@ -659,7 +726,7 @@ function endRun() {
 
     if (stats) stats.innerHTML =
       `${line1}<br>` +
-      `Score: <b>${score}</b> · <span class="go-best">Best: ${best}</span><br>` +
+      `${scoreLine}<br>` +
       `🔮 Shards earned: <b>+${shardsEarned}</b>`;
     renderLegacyShop();
   }
@@ -785,10 +852,13 @@ function resetRun() {
   bossesKilledThisRun = 0;
   lowestHeartFrac = 1;
   newBestShown = false;
+  runStatsFlushed = false;
   // The score to beat for the mid-run "new personal best" fanfare.
   bestAtRunStart = 0;
   if (mode === "ranked") {
     try { bestAtRunStart = Number(localStorage.getItem("vx-best-score") || 0); } catch { /* none */ }
+  } else if (mode === "daily") {
+    bestAtRunStart = daily.todayBest;
   }
   resetContractsForRun();
   buildHeart(false);
@@ -1139,13 +1209,20 @@ function resetTweaksToDefaults() {
 }
 
 // Reflect the current mode in the DOM: sandbox reveals the Tweaks panel and
-// the "not saved" markers (via body.sandbox); ranked hides Tweaks outright so
-// a scored run has no doctoring surface at all.
+// the "not saved" markers (via body.sandbox); ranked/daily hide Tweaks
+// outright so a scored run has no doctoring surface at all. Daily also locks
+// the world controls — its board is fixed for the day.
 function applyMode() {
   const sandbox = mode === "sandbox";
   document.body.classList.toggle("sandbox", sandbox);
+  document.body.classList.toggle("daily", mode === "daily");
   const tweaks = document.getElementById("vx-tweaks");
   if (tweaks) tweaks.style.display = sandbox ? "" : "none";
+  const lock = mode === "daily";
+  for (const id of ["vx-seed", "vx-biome", "vx-new"]) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = lock;
+  }
 }
 
 // Stat curves live in core; these wrappers bind the live Tweaks-slider
@@ -1809,6 +1886,9 @@ function rebuildBlockMeshes() {
 }
 
 function generateWorld(seed, biomeKey, keepZombies = false) {
+  // A brand-new world abandons whatever run was live — bank its stats
+  // first (no-ops if already flushed, or if nothing really happened).
+  if (!keepZombies) flushRunStats();
   const biome = BIOMES[biomeKey];
   currentBiome = biome;
   currentHeights = buildHeightmap(seed, biome);
@@ -2702,7 +2782,7 @@ function init() {
     const t = e.target;
     if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
     keys[e.key.toLowerCase()] = true;
-    if (e.key.toLowerCase() === "r") regenerate(true);
+    if (e.key.toLowerCase() === "r") restartRun();
     if (e.key.toLowerCase() === "p") togglePause();
   });
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
@@ -2749,7 +2829,7 @@ function init() {
     updateZombieBoard();
   });
 
-  document.getElementById("vx-go-restart").addEventListener("click", () => regenerate(true));
+  document.getElementById("vx-go-restart").addEventListener("click", restartRun);
   document.getElementById("vx-shop-repair").addEventListener("click", buyRepair);
   document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
   document.getElementById("vx-shop-mine").addEventListener("click", buyMine);
@@ -2762,7 +2842,7 @@ function init() {
   });
   document.getElementById("vx-pause-btn")?.addEventListener("click", togglePause);
   document.getElementById("vx-resume-btn")?.addEventListener("click", togglePause);
-  document.getElementById("vx-pause-newrun")?.addEventListener("click", () => regenerate(true));
+  document.getElementById("vx-pause-newrun")?.addEventListener("click", restartRun);
   // Back to the title (also the only way to switch Ranked/Sandbox mid-session).
   document.getElementById("vx-pause-menu")?.addEventListener("click", goToTitle);
   document.getElementById("vx-go-menu")?.addEventListener("click", goToTitle);
@@ -2776,24 +2856,46 @@ function init() {
   // persisted settings so the menu reflects what's actually active.
   document.getElementById("vx-title-play").addEventListener("click", startFromTitle);
   for (const btn of document.querySelectorAll(".diff-btn")) {
-    btn.classList.toggle("active", btn.dataset.diff === difficulty);
     btn.addEventListener("click", () => {
-      difficulty = btn.dataset.diff;
+      if (mode === "daily") return; // dailies are always ⚔️ Normal
+      chosenDifficulty = btn.dataset.diff;
+      difficulty = chosenDifficulty;
       for (const b of document.querySelectorAll(".diff-btn")) b.classList.toggle("active", b === btn);
       saveSettings();
     });
   }
 
-  // Ranked vs Sandbox selector — mirrors the persisted mode into the title
-  // controls (active button, play-button label, and the "what's saved" note).
+  // Ranked / Daily / Sandbox selector — mirrors the persisted mode into the
+  // title controls (active button, play-button label, the "what's saved"
+  // note, and the difficulty row, which Daily locks to Normal).
   const modeNote = document.getElementById("vx-mode-note");
   const updateModeUi = () => {
     for (const b of document.querySelectorAll(".mode-btn")) b.classList.toggle("active", b.dataset.mode === mode);
     const playBtn = document.getElementById("vx-title-play");
-    if (playBtn) playBtn.textContent = mode === "sandbox" ? "🧪 Enter Sandbox" : "▶ Defend the Heart";
-    if (modeNote) modeNote.textContent = mode === "sandbox"
-      ? "Free experimentation — nothing is saved."
-      : "Best score, achievements & shards are saved.";
+    if (playBtn) {
+      playBtn.textContent = mode === "sandbox" ? "🧪 Enter Sandbox"
+        : mode === "daily" ? "📅 Play Today's Daily"
+        : "▶ Defend the Heart";
+    }
+    if (modeNote) {
+      if (mode === "sandbox") {
+        modeNote.textContent = "Free experimentation — nothing is saved.";
+      } else if (mode === "daily") {
+        const today = todayStr();
+        const playedToday = daily.lastDay === today;
+        const bits = [`One fixed world per day (${today})`];
+        if (daily.streak > 0) bits.push(`🔥 ${daily.streak}-day streak`);
+        bits.push(playedToday ? `today's best: ${daily.todayBest}` : "not played yet — keep the flame alive!");
+        modeNote.textContent = bits.join(" · ");
+      } else {
+        modeNote.textContent = "Best score, achievements & shards are saved.";
+      }
+    }
+    const diffLocked = mode === "daily";
+    for (const b of document.querySelectorAll(".diff-btn")) {
+      b.disabled = diffLocked;
+      b.classList.toggle("active", diffLocked ? b.dataset.diff === "normal" : b.dataset.diff === chosenDifficulty);
+    }
   };
   for (const btn of document.querySelectorAll(".mode-btn")) {
     btn.addEventListener("click", () => {
@@ -2802,7 +2904,29 @@ function init() {
       saveSettings();
     });
   }
+  refreshModeUi = updateModeUi;
   updateModeUi();
+
+  // 📊 Stats and 🏆 Achievements fold-out panels on the title screen —
+  // mutually exclusive so the panel never grows past the viewport.
+  const statsBtn = document.getElementById("vx-stats-btn");
+  const achBtn = document.getElementById("vx-ach-btn");
+  const statsPanel = document.getElementById("vx-stats-panel");
+  const achPanel = document.getElementById("vx-ach-panel");
+  statsBtn?.addEventListener("click", () => {
+    const open = statsPanel?.classList.toggle("show");
+    achPanel?.classList.remove("show");
+    achBtn?.classList.remove("active");
+    statsBtn.classList.toggle("active", !!open);
+    renderStatsPanel();
+  });
+  achBtn?.addEventListener("click", () => {
+    const open = achPanel?.classList.toggle("show");
+    statsPanel?.classList.remove("show");
+    statsBtn?.classList.remove("active");
+    achBtn.classList.toggle("active", !!open);
+    renderAchievementsPanel();
+  });
   const volumeEl = document.getElementById("vx-volume");
   volumeEl.value = String(settings.volume);
   volumeEl.addEventListener("input", () => {
@@ -2888,13 +3012,14 @@ function loop() {
 // Abandon the current run and return to the title (from pause or game-over).
 // The sim freezes behind the menu; picking a mode + Play starts a fresh run.
 function goToTitle() {
+  flushRunStats(); // an abandoned run still counts toward lifetime stats
   document.getElementById("vx-gameover")?.classList.remove("show");
   document.getElementById("vx-paused")?.classList.remove("show");
   showTitle();
 }
 
 // The pre-run menu: world renders and idles behind it, sim frozen until
-// Play. Doubles as the settings + difficulty screen.
+// Play. Doubles as the settings + difficulty + stats/achievements screen.
 function showTitle() {
   gameState = "menu";
   const meta = document.getElementById("vx-title-meta");
@@ -2902,19 +3027,92 @@ function showTitle() {
     let best = 0;
     try { best = Number(localStorage.getItem("vx-best-score") || 0); } catch { /* fresh */ }
     const unlocked = Object.keys(unlockedAchievements).length;
+    const streakBit = daily.streak > 0 ? ` · 📅 <b>${daily.streak}</b>-day streak` : "";
     meta.innerHTML =
       `Best score: <b>${best}</b> · Achievements: <b>${unlocked}/${Object.keys(ACHIEVEMENTS).length}</b>` +
-      ` · Legacy shards: <b>${legacy.shards}</b>`;
+      ` · Legacy shards: <b>${legacy.shards}</b>${streakBit}`;
   }
+  renderStatsPanel();
+  renderAchievementsPanel();
+  refreshModeUi(); // daily note/streak may have changed since the last visit
   document.getElementById("vx-title")?.classList.add("show");
+}
+
+// Bound to the real updater inside init() (it closes over title DOM); a
+// no-op until then so early showTitle callers are safe.
+let refreshModeUi = () => {};
+
+// Lifetime numbers, rendered into the title's 📊 panel.
+function renderStatsPanel() {
+  const el = document.getElementById("vx-stats-panel");
+  if (!el) return;
+  const s = lifeStats;
+  const hours = Math.floor(s.timePlayed / 3600), minutes = Math.floor((s.timePlayed % 3600) / 60);
+  const rows = [
+    ["Runs", s.runs],
+    ["Zombies destroyed", s.kills],
+    ["Bosses slain", s.bosses],
+    ["Best wave", s.bestWave || "—"],
+    ["Waves survived (total)", s.totalWaves],
+    ["Best combo", s.bestCombo >= 2 ? `×${s.bestCombo}` : "—"],
+    ["Contracts completed", s.contractsDone],
+    ["Dailies played", s.dailies],
+    ["Time defending", hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`],
+  ];
+  el.innerHTML = rows
+    .map(([k, v]) => `<div class="subpanel-row"><span>${k}</span><span>${v}</span></div>`)
+    .join("");
+}
+
+// The full trophy cabinet: every achievement, unlocked ones lit up.
+function renderAchievementsPanel() {
+  const el = document.getElementById("vx-ach-panel");
+  if (!el) return;
+  el.innerHTML = Object.entries(ACHIEVEMENTS)
+    .map(([key, label]) => {
+      const got = !!unlockedAchievements[key];
+      return `<div class="subpanel-row ach${got ? " got" : ""}">` +
+        `<span>${got ? "🏆" : "🔒"}</span><span>${label.replace(/^🏆 /, "")}</span></div>`;
+    })
+    .join("");
+}
+
+// Kick off today's fixed daily board: streak bookkeeping, then the
+// day-seeded world (generateWorld → resetRun starts the fresh run).
+function startDailyRun() {
+  const today = todayStr();
+  daily = core.updateDailyOnPlay(daily, today);
+  saveDaily();
+  if (daily.streak >= 3) unlockAchievement("streak-3");
+  difficulty = "normal"; // dailies are a level playing field
+  const seedInput = document.getElementById("vx-seed");
+  const biomeSelect = document.getElementById("vx-biome");
+  if (seedInput) seedInput.value = core.dailySeed(today);
+  if (biomeSelect) biomeSelect.value = core.dailyBiome(today);
+  generateWorld(core.dailySeed(today), core.dailyBiome(today));
+  target.set(GRID / 2, 0, GRID / 2);
 }
 
 function startFromTitle() {
   document.getElementById("vx-title")?.classList.remove("show");
+  if (mode === "daily") {
+    startDailyRun();
+    return;
+  }
+  difficulty = chosenDifficulty;
   gameState = "playing";
   // Menu time doesn't count as survival, and difficulty may have changed —
   // rebuild the Heart at the (possibly rescaled) full HP and restart clocks.
   resetRun();
+}
+
+// "New run" (game-over, pause, R key): a fresh random world in ranked and
+// sandbox, but the SAME fixed board in daily — replaying today's world is
+// the whole point of a daily.
+function restartRun() {
+  if (gameState === "menu") return; // the title's Play button owns starts
+  if (mode === "daily") startDailyRun();
+  else regenerate(true);
 }
 
 let pauseStartedAt = 0;

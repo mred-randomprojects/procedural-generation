@@ -145,6 +145,49 @@ html, body {
 .title-meta { font-size: 12px; color: #7f93a5; }
 .title-meta b { color: #ffcf5a; }
 
+.title-extra { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+.title-extra button {
+  background: #1d2833;
+  color: #b7c4d0;
+  border: 1px solid #33475c;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.title-extra button:hover { filter: brightness(1.2); }
+.title-extra button.active { background: #133247; color: #9fe8ff; border-color: #2e6f96; }
+
+.title-subpanel {
+  display: none;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #2a3540;
+  border-radius: 10px;
+  background: rgba(10, 14, 20, 0.6);
+  text-align: left;
+  max-height: 230px;
+  overflow-y: auto;
+}
+.title-subpanel.show { display: block; }
+.subpanel-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 12.5px;
+  color: #c9d4de;
+  font-variant-numeric: tabular-nums;
+}
+.subpanel-row span:last-child { color: #ffcf5a; font-weight: 600; }
+.subpanel-row.ach { justify-content: flex-start; color: #6b7684; }
+.subpanel-row.ach span:last-child { color: inherit; font-weight: 400; font-size: 12px; }
+.subpanel-row.ach.got { color: #d9e2ec; }
+.subpanel-row.ach.got span:last-child { color: #ffd88a; }
+
+/* Diff buttons gray out while Daily (always Normal) is selected. */
+.diff-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 #vx-vignette {
   position: absolute;
   inset: 0;
@@ -452,6 +495,30 @@ html, body {
   text-align: center;
 }
 body.sandbox #vx-sandbox-note { display: block; }
+
+/* Same idea for Daily Challenge runs (body.daily, set by applyMode). */
+#vx-daily-note {
+  display: none;
+  margin-bottom: 7px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(60, 110, 175, 0.28);
+  border: 1px solid rgba(110, 180, 255, 0.55);
+  color: #b8dcff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-align: center;
+}
+body.daily #vx-daily-note { display: block; }
+
+/* Daily locks the world controls (fixed board): make it read as locked. */
+body.daily #vx-seed:disabled,
+body.daily #vx-biome:disabled,
+body.daily #vx-new:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 .hud-score-row {
   display: flex;
