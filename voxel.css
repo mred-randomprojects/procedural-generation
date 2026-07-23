@@ -82,19 +82,6 @@ html, body {
   margin-right: 2px;
 }
 
-#vx-radius-down, #vx-radius-up {
-  background: #1d2833;
-  color: #e6ebf1;
-  border: 1px solid #33475c;
-  border-radius: 7px;
-  width: 24px;
-  height: 24px;
-  line-height: 1;
-  font-size: 14px;
-  cursor: pointer;
-}
-#vx-radius-down:hover, #vx-radius-up:hover { filter: brightness(1.2); }
-
 #vx-radius-val {
   min-width: 16px;
   text-align: center;

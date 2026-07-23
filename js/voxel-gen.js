@@ -55,7 +55,7 @@ const DEPTH_LAYERS = 4; // rendered layers below the surface, deep enough for si
 const MONSTER_COUNT = 9;
 const MAX_MONSTERS = 26;
 const MERGE_DIST = 0.85;
-const MIN_BLAST = 1, MAX_BLAST = 8, STARTING_MAX_BLAST = 3;
+const MAX_BLAST = 8, STARTING_MAX_BLAST = 3;
 // Cumulative XP needed to unlock each bigger blast radius.
 const BLAST_UNLOCK_XP = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
 const REGEN_DELAY = 6;    // seconds of no explosions before terrain starts healing
@@ -75,7 +75,6 @@ let currentHeights = null, originalHeights = null, currentSeaLevel = -99, curren
 let currentSeed = "terra", monsterIdCounter = 0;
 let lastTime = 0;
 let panHoldTime = 0;
-let blastRadius = 3;
 let maxUnlockedBlast = STARTING_MAX_BLAST;
 let shake = 0;
 let killCount = 0, xp = 0;
@@ -84,6 +83,7 @@ let lastBlastX = 0, lastBlastZ = 0;
 
 let raycaster, missiles = [], fx = [];
 let missileGeo, missileMat;
+let aimOuter, aimInner, hoverClientX = null, hoverClientY = null;
 
 function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
@@ -178,7 +178,6 @@ function spawnMonsters(biome, heights, seed) {
   killCount = 0;
   xp = 0;
   maxUnlockedBlast = STARTING_MAX_BLAST;
-  setBlastRadius(Math.min(blastRadius, STARTING_MAX_BLAST));
   updateScoreHud();
 }
 
@@ -255,6 +254,9 @@ function updateScoreHud() {
   const killEl = document.getElementById("vx-score-val");
   if (killEl) killEl.textContent = String(killCount);
 
+  const radiusEl = document.getElementById("vx-radius-val");
+  if (radiusEl) radiusEl.textContent = String(maxUnlockedBlast);
+
   const xpEl = document.getElementById("vx-xp-val");
   if (xpEl) xpEl.textContent = String(xp);
 
@@ -275,13 +277,16 @@ function updateScoreHud() {
 // Bigger blast radii unlock permanently as you earn more XP. Called any
 // time XP changes; announces each new unlock with an on-screen toast.
 function checkBlastUnlocks() {
+  let unlocked = false;
   for (let r = maxUnlockedBlast + 1; r <= MAX_BLAST; r++) {
     const cost = BLAST_UNLOCK_XP[r];
     if (cost === undefined || xp < cost) break;
     maxUnlockedBlast = r;
+    unlocked = true;
     showToast(`💥 Blast radius ${r} unlocked!`);
   }
   updateScoreHud();
+  if (unlocked) updateAimIndicator();
 }
 
 let toastTimer = null;
@@ -346,11 +351,13 @@ function updateMonsters(dt, now) {
 }
 
 function killMonstersNear(bx, bz, r) {
+  const coreR = Math.floor(r / 2); // inner half of the radius — double damage
   let kills = 0, earned = 0;
   for (let i = monsters.length - 1; i >= 0; i--) {
     const m = monsters[i];
-    if (Math.hypot(m.x - bx, m.z - bz) > r + 1) continue;
-    m.hp -= 1;
+    const d = Math.hypot(m.x - bx, m.z - bz);
+    if (d > r + 1) continue;
+    m.hp -= d <= coreR ? 2 : 1;
     if (m.hp > 0) {
       spawnHitFlinch(m); // elite survives a hit — knock it back and flash it
       continue;
@@ -607,9 +614,7 @@ function generateWorld(seed, biomeKey) {
 const MISSILE_COOLDOWN = 0.5;
 let lastFireTime = -999;
 
-function tryFireMissile(clientX, clientY) {
-  const now = performance.now() / 1000;
-  if (now - lastFireTime < MISSILE_COOLDOWN) return;
+function raycastGround(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   const ndc = new THREE.Vector2(
     ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -617,9 +622,36 @@ function tryFireMissile(clientX, clientY) {
   );
   raycaster.setFromCamera(ndc, camera);
   const hits = raycaster.intersectObjects(blockMeshes, false);
-  if (!hits.length) return;
+  return hits.length ? hits[0].point : null;
+}
+
+function tryFireMissile(clientX, clientY) {
+  const now = performance.now() / 1000;
+  if (now - lastFireTime < MISSILE_COOLDOWN) return;
+  const point = raycastGround(clientX, clientY);
+  if (!point) return;
   lastFireTime = now;
-  fireMissile(hits[0].point.x, hits[0].point.y, hits[0].point.z);
+  fireMissile(point.x, point.y, point.z);
+}
+
+// Ground-projected preview of where a missile would land: an outer ring for
+// the full blast radius and a brighter inner disc for the double-damage core.
+function updateAimIndicator() {
+  if (hoverClientX === null || !blockMeshes) return;
+  const point = raycastGround(hoverClientX, hoverClientY);
+  if (!point) { aimOuter.visible = aimInner.visible = false; return; }
+  const y = heightAt(point.x, point.z) + 0.52;
+  const coreR = Math.floor(maxUnlockedBlast / 2);
+  aimOuter.position.set(point.x, y, point.z);
+  aimOuter.scale.set(maxUnlockedBlast, maxUnlockedBlast, 1);
+  aimOuter.visible = true;
+  if (coreR > 0) {
+    aimInner.position.set(point.x, y + 0.01, point.z);
+    aimInner.scale.set(coreR, coreR, 1);
+    aimInner.visible = true;
+  } else {
+    aimInner.visible = false;
+  }
 }
 
 function fireMissile(tx, ty, tz) {
@@ -683,7 +715,8 @@ function spawnTrailPuff(pos) {
 // Carves a crater into currentHeights and marks the char/scorch mask; does not
 // touch the render meshes (caller rebuilds them once, after other edits).
 function craterEdit(bx, bz) {
-  const R = blastRadius, R2 = R + 1.6;
+  const R = maxUnlockedBlast, R2 = R + 1.6;
+  const coreR = Math.floor(R / 2); // inner half of the radius — double damage
   const cx = Math.round(bx), cz = Math.round(bz);
   const span = Math.ceil(R2);
   for (let dz = -span; dz <= span; dz++) {
@@ -694,7 +727,8 @@ function craterEdit(bx, bz) {
       if (d > R2) continue;
       const idx = z * GRID + x;
       if (d <= R) {
-        const carve = Math.max(1, Math.round((R - d) * 0.85 + 1));
+        const base = Math.max(1, Math.round((R - d) * 0.85 + 1));
+        const carve = d <= coreR ? base * 2 : base;
         currentHeights[idx] = Math.max(0, currentHeights[idx] - carve);
         scorched[idx] = 1;
       } else if (Math.random() < 0.55) {
@@ -736,16 +770,16 @@ function explodeAt(bx, bz) {
   lastExplosionTime = performance.now() / 1000;
 
   craterEdit(bx, bz);
-  destroyTreesNear(bx, bz, blastRadius);
-  killMonstersNear(bx, bz, blastRadius);
+  destroyTreesNear(bx, bz, maxUnlockedBlast);
+  killMonstersNear(bx, bz, maxUnlockedBlast);
   rebuildBlockMeshes();
 
-  shake = Math.min(4.5, shake + 0.25 + blastRadius * 0.45);
-  playExplosion(blastRadius);
+  shake = Math.min(4.5, shake + 0.25 + maxUnlockedBlast * 0.45);
+  playExplosion(maxUnlockedBlast);
 
   const center = new THREE.Vector3(bx, groundYBefore, bz);
 
-  const light = new THREE.PointLight(0xffb060, 10, blastRadius * 6 + 8, 2);
+  const light = new THREE.PointLight(0xffb060, 10, maxUnlockedBlast * 6 + 8, 2);
   light.position.set(bx, groundYBefore + 2, bz);
   root.add(light);
   fx.push({ type: "light", obj: light, age: 0, life: 0.35, baseIntensity: 10 });
@@ -758,7 +792,7 @@ function explodeAt(bx, bz) {
   const fireball = new THREE.Mesh(fireGeo, fireMat);
   fireball.position.copy(center);
   root.add(fireball);
-  fx.push({ type: "fireball", obj: fireball, age: 0, life: 0.4, maxR: blastRadius * 0.9 + 1.2 });
+  fx.push({ type: "fireball", obj: fireball, age: 0, life: 0.4, maxR: maxUnlockedBlast * 0.9 + 1.2 });
 
   const ringGeo = new THREE.RingGeometry(0.6, 1, 32);
   const ringMat = new THREE.MeshBasicMaterial({
@@ -769,7 +803,7 @@ function explodeAt(bx, bz) {
   ring.rotation.x = -Math.PI / 2;
   ring.position.set(bx, groundYBefore + 0.05, bz);
   root.add(ring);
-  fx.push({ type: "ring", obj: ring, age: 0, life: 0.6, maxR: blastRadius * 1.6 + 2 });
+  fx.push({ type: "ring", obj: ring, age: 0, life: 0.6, maxR: maxUnlockedBlast * 1.6 + 2 });
 
   for (let i = 0; i < 18; i++) {
     const a = Math.random() * Math.PI * 2, speed = 4 + Math.random() * 7;
@@ -794,9 +828,9 @@ function explodeAt(bx, bz) {
     });
     const s = new THREE.Mesh(geo, mat);
     s.position.set(
-      center.x + (Math.random() - 0.5) * blastRadius * 0.7,
+      center.x + (Math.random() - 0.5) * maxUnlockedBlast * 0.7,
       groundYBefore + 0.3,
-      center.z + (Math.random() - 0.5) * blastRadius * 0.7
+      center.z + (Math.random() - 0.5) * maxUnlockedBlast * 0.7
     );
     root.add(s);
     fx.push({
@@ -806,7 +840,7 @@ function explodeAt(bx, bz) {
   }
 
   const debrisColor = currentBiome.rock;
-  const debrisCount = Math.min(24, 8 + blastRadius * 2);
+  const debrisCount = Math.min(24, 8 + maxUnlockedBlast * 2);
   for (let i = 0; i < debrisCount; i++) {
     const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 5;
     const size = 0.12 + Math.random() * 0.18;
@@ -830,8 +864,8 @@ function explodeAt(bx, bz) {
       blending: THREE.AdditiveBlending, depthWrite: false,
     });
     const f = new THREE.Mesh(geo, mat);
-    const ox = (Math.random() - 0.5) * blastRadius * 1.1;
-    const oz = (Math.random() - 0.5) * blastRadius * 1.1;
+    const ox = (Math.random() - 0.5) * maxUnlockedBlast * 1.1;
+    const oz = (Math.random() - 0.5) * maxUnlockedBlast * 1.1;
     f.position.set(bx + ox, groundYBefore + 0.2, bz + oz);
     root.add(f);
     fx.push({
@@ -921,16 +955,6 @@ function updateFx(dt) {
   }
 }
 
-function setBlastRadius(r) {
-  if (r > maxUnlockedBlast) {
-    const cost = BLAST_UNLOCK_XP[maxUnlockedBlast + 1];
-    if (cost !== undefined) showToast(`🔒 Radius ${maxUnlockedBlast + 1} needs ${cost} XP (you have ${xp})`);
-  }
-  blastRadius = Math.max(MIN_BLAST, Math.min(maxUnlockedBlast, r));
-  const label = document.getElementById("vx-radius-val");
-  if (label) label.textContent = String(blastRadius);
-}
-
 /* ---------- camera / render loop ---------- */
 
 function updateCamera() {
@@ -972,6 +996,24 @@ function init() {
   missileGeo.rotateX(-Math.PI / 2); // tip points toward -Z so lookAt() aims it correctly
   missileMat = new THREE.MeshLambertMaterial({ color: 0x445055 });
 
+  // Ground-projected blast-radius preview that follows the mouse; unit circles
+  // scaled per-frame to the current (outer) and core double-damage (inner) radius.
+  const circleGeo = new THREE.CircleGeometry(1, 48);
+  const outerMat = new THREE.MeshBasicMaterial({
+    color: 0xff9a3c, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
+  });
+  const innerMat = new THREE.MeshBasicMaterial({
+    color: 0xff3b2e, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false,
+  });
+  aimOuter = new THREE.Mesh(circleGeo, outerMat);
+  aimInner = new THREE.Mesh(circleGeo, innerMat);
+  for (const m of [aimOuter, aimInner]) {
+    m.rotation.x = -Math.PI / 2;
+    m.visible = false;
+    m.renderOrder = 1;
+    root.add(m);
+  }
+
   camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 300);
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
@@ -1004,10 +1046,17 @@ function init() {
     clickStartX = null;
   });
   window.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    theta -= (e.clientX - lastX) * 0.006;
-    phi = Math.min(1.45, Math.max(0.25, phi - (e.clientY - lastY) * 0.006));
-    lastX = e.clientX; lastY = e.clientY;
+    if (dragging) {
+      theta -= (e.clientX - lastX) * 0.006;
+      phi = Math.min(1.45, Math.max(0.25, phi - (e.clientY - lastY) * 0.006));
+      lastX = e.clientX; lastY = e.clientY;
+    }
+    hoverClientX = e.clientX; hoverClientY = e.clientY;
+    updateAimIndicator();
+  });
+  canvas.addEventListener("mouseleave", () => {
+    hoverClientX = null; hoverClientY = null;
+    aimOuter.visible = aimInner.visible = false;
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -1019,8 +1068,6 @@ function init() {
   window.addEventListener("keydown", (e) => {
     keys[e.key.toLowerCase()] = true;
     if (e.key.toLowerCase() === "r") regenerate(true);
-    if (e.key === "+" || e.key === "=") setBlastRadius(blastRadius + 1);
-    if (e.key === "-" || e.key === "_") setBlastRadius(blastRadius - 1);
   });
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -1029,10 +1076,6 @@ function init() {
   document.getElementById("vx-new").addEventListener("click", () => regenerate(true));
   seedInput.addEventListener("change", () => regenerate(false));
   biomeSelect.addEventListener("change", () => regenerate(false));
-
-  document.getElementById("vx-radius-up")?.addEventListener("click", () => setBlastRadius(blastRadius + 1));
-  document.getElementById("vx-radius-down")?.addEventListener("click", () => setBlastRadius(blastRadius - 1));
-  setBlastRadius(blastRadius);
 
   regenerate(false);
   requestAnimationFrame(loop);
