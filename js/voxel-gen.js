@@ -552,6 +552,7 @@ function resetRun() {
   document.getElementById("vx-gameover")?.classList.remove("show");
   document.getElementById("vx-paused")?.classList.remove("show");
   updateHeartHud();
+  updateScoreHud(); // energy was just reset/seeded above — refresh its readout
   updateShopHud();
 }
 
