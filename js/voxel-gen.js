@@ -856,7 +856,7 @@ function craterEdit(bx, bz) {
   for (let dz = -span; dz <= span; dz++) {
     for (let dx = -span; dx <= span; dx++) {
       const x = cx + dx, z = cz + dz;
-      if (x < 1 || z < 1 || x >= GRID - 1 || z >= GRID - 1) continue;
+      if (x < 0 || z < 0 || x >= GRID || z >= GRID) continue; // stay in array bounds only — edges are destructible too
       const d = Math.hypot(dx, dz);
       if (d > R2) continue;
       const idx = z * GRID + x;
