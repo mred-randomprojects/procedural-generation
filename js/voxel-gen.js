@@ -111,6 +111,17 @@ let raycaster, missiles = [], fx = [];
 let missileGeo, missileMat;
 let highlightGeo, highlightOuterMat, highlightCoreMat, hoverClientX = null, hoverClientY = null;
 
+/* ---------- The Heart: the thing you're defending ---------- */
+// The game's objective. Zombies gravitate toward it and shoot it with the
+// same projectiles they use on each other; when its HP reaches 0 the run
+// ends. `stackLevel: 1` makes it a valid projectile target with zero armor
+// (defenseFor(1) === 0) — every zombie can always hurt the Heart.
+const HEART_MAX_HP = 100;
+let heart = null; // { isHeart, x, z, y, visualY, stackLevel, hp, group, crystal, glow, light }
+let gameState = "playing"; // "playing" | "over"
+let waveNumber = 0, waveTimer = 18, trickleTimer = 5;
+let runStartTime = 0; // seconds (performance.now() clock) when the current run began
+
 function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
   const zi = Math.max(0, Math.min(GRID - 1, Math.round(z)));
@@ -133,6 +144,99 @@ function isWaterAt(x, z) {
 function initVerticalState(x, z) {
   const y = heightAt(x, z) + 0.5;
   return { groundTarget: y, visualY: y, hopFrom: y, hopTo: y, hopT: 1 };
+}
+
+// Finds dry land nearest the map center for the Heart to stand on —
+// spirals outward from dead center until it hits a non-water column.
+function findHeartSpot() {
+  const c = GRID / 2;
+  for (let r = 0; r < GRID / 2; r++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue; // ring only
+        const x = Math.round(c + dx), z = Math.round(c + dz);
+        if (x < 3 || z < 3 || x >= GRID - 3 || z >= GRID - 3) continue;
+        if (!isWaterAt(x, z)) return { x, z };
+      }
+    }
+  }
+  return { x: Math.round(c), z: Math.round(c) };
+}
+
+// Builds (or rebuilds, on terrain change) the Heart crystal at the map
+// center: a slowly spinning octahedron with a glow sprite and its own light.
+// keepHp preserves damage across a keep-zombies terrain regen.
+function buildHeart(keepHp = false) {
+  const prevHp = keepHp && heart ? heart.hp : HEART_MAX_HP;
+  if (heart) root.remove(heart.group);
+  const { x, z } = findHeartSpot();
+  const y = heightAt(x, z) + 1;
+
+  const group = new THREE.Group();
+  const crystal = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.75),
+    new THREE.MeshLambertMaterial({ color: 0x66d9ff, emissive: 0x1c5a78 })
+  );
+  crystal.position.y = 1.1;
+  group.add(crystal);
+
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.55, 0.75, 0.35, 8),
+    new THREE.MeshLambertMaterial({ color: 0x3a4a58 })
+  );
+  base.position.y = 0.18;
+  group.add(base);
+
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTex, color: 0x7fe8ff, transparent: true, opacity: 0.55,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  glow.scale.setScalar(4.2);
+  glow.position.y = 1.2;
+  group.add(glow);
+
+  const light = new THREE.PointLight(0x7fe8ff, 6, 14, 2);
+  light.position.y = 2;
+  group.add(light);
+
+  group.position.set(x, y, z);
+  root.add(group);
+
+  heart = { isHeart: true, x, z, y, visualY: y + 0.3, stackLevel: 1, hp: prevHp, group, crystal, glow, light };
+  updateHeartHud();
+}
+
+// Spin/bob the crystal, track terrain height (blasts can lower the ground
+// under it), and pulse faster the closer the Heart is to dying.
+function updateHeart(now) {
+  if (!heart) return;
+  const y = heightAt(heart.x, heart.z) + 1;
+  heart.y = y;
+  heart.visualY = y + 0.3;
+  heart.group.position.y = y;
+  heart.crystal.rotation.y = now * 0.8;
+  const frac = Math.max(0, heart.hp) / HEART_MAX_HP;
+  const urgency = 1 + (1 - frac) * 3;
+  heart.crystal.position.y = 1.1 + Math.sin(now * 1.6 * urgency) * 0.12;
+  heart.glow.material.opacity = 0.4 + 0.2 * Math.sin(now * 2 * urgency) + (1 - frac) * 0.15;
+}
+
+function updateHeartHud() {
+  const fill = document.getElementById("vx-heart-fill");
+  const waveEl = document.getElementById("vx-wave-val");
+  if (waveEl) waveEl.textContent = waveNumber === 0 ? "Calm before the storm" : `Wave ${waveNumber}`;
+  if (!fill) return;
+  const frac = Math.max(0, heart ? heart.hp : 0) / HEART_MAX_HP;
+  fill.style.width = `${frac * 100}%`;
+  fill.classList.toggle("hurt", frac <= 0.6 && frac > 0.3);
+  fill.classList.toggle("critical", frac <= 0.3);
+}
+
+function damageHeart(amount) {
+  if (!heart || gameState !== "playing") return;
+  heart.hp -= amount;
+  updateHeartHud();
+  if (heart.hp <= 0) endRun();
 }
 
 /* ---------- zombies ---------- */
@@ -223,12 +327,24 @@ function spawnMonsters(biome, heights, seed) {
 }
 
 // Spawns one fresh zombie at a random valid spot — used to replace a killed one.
-function spawnRandomZombie() {
+function spawnRandomZombie(atEdge = false) {
   const biome = currentBiome;
   let x = GRID / 2, z = GRID / 2, h;
   for (let tries = 0; tries < 30; tries++) {
-    x = 3 + Math.random() * (GRID - 6);
-    z = 3 + Math.random() * (GRID - 6);
+    if (atEdge) {
+      // Invasion spawns arrive from the map's rim, not teleported into the
+      // middle of the defense — a narrow band along a random side.
+      const side = Math.floor(Math.random() * 4);
+      const along = 3 + Math.random() * (GRID - 6);
+      const inset = 3 + Math.random() * 2;
+      if (side === 0) { x = along; z = inset; }
+      else if (side === 1) { x = along; z = GRID - inset; }
+      else if (side === 2) { x = inset; z = along; }
+      else { x = GRID - inset; z = along; }
+    } else {
+      x = 3 + Math.random() * (GRID - 6);
+      z = 3 + Math.random() * (GRID - 6);
+    }
     h = heightAt(x, z);
     if (h > biome.seaLevel && h < biome.snowLine) break;
   }
@@ -268,6 +384,80 @@ function processPendingSpawns(now) {
   if (due.length === 0) return;
   pendingSpawns = pendingSpawns.filter((t) => t > now);
   for (let i = 0; i < due.length; i++) spawnRandomZombie();
+}
+
+/* ---------- run structure: waves, defeat, restart ---------- */
+
+// The difficulty engine. Waves land on a shrinking timer and each brings a
+// bigger batch of edge-spawned invaders; between waves a trickle keeps
+// low-grade pressure on. Combined with zombie-vs-zombie eating (which
+// concentrates all those bodies into ever-higher levels), the siege
+// escalates on its own — the player is racing the evolution curve.
+function updateWaves(dt) {
+  if (gameState !== "playing") return;
+  waveTimer -= dt;
+  if (waveTimer <= 0) {
+    waveNumber++;
+    waveTimer = Math.max(10, 22 - waveNumber * 0.5);
+    const count = 2 + waveNumber;
+    for (let i = 0; i < count; i++) spawnRandomZombie(true);
+    showToast(`🌊 Wave ${waveNumber} — ${count} invaders!`);
+    updateHeartHud();
+  }
+  trickleTimer -= dt;
+  if (trickleTimer <= 0) {
+    trickleTimer = Math.max(1.5, 5 - waveNumber * 0.15);
+    spawnRandomZombie(true);
+  }
+}
+
+function runScore(survivalSeconds) {
+  return Math.round(survivalSeconds) + killCount * 5;
+}
+
+function endRun() {
+  gameState = "over";
+  const now = performance.now() / 1000;
+  const survived = now - runStartTime;
+  let maxLevel = 1;
+  for (const m of monsters) if (m.stackLevel > maxLevel) maxLevel = m.stackLevel;
+  const score = runScore(survived);
+  let best = 0;
+  try {
+    best = Number(localStorage.getItem("vx-best-score") || 0);
+    if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
+  } catch { /* storage may be unavailable; the run still ends cleanly */ }
+
+  // A last blast of drama at the Heart as it shatters.
+  if (heart) {
+    spawnEatFx(heart.x, heart.y + 1, heart.z);
+    shake = 4.5;
+  }
+
+  const stats = document.getElementById("vx-go-stats");
+  if (stats) {
+    const mins = Math.floor(survived / 60), secs = Math.round(survived % 60);
+    stats.innerHTML =
+      `Survived <b>${mins}m ${secs}s</b> across <b>${waveNumber}</b> waves<br>` +
+      `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b><br>` +
+      `Score: <b>${score}</b> · <span class="go-best">Best: ${best}</span>`;
+  }
+  document.getElementById("vx-gameover")?.classList.add("show");
+  updateHeartHud();
+}
+
+// Fresh run on the CURRENT world: new Heart at full HP, wave clock reset.
+// Called from generateWorld (every new world starts a fresh run) and the
+// game-over restart button (which regenerates the world too).
+function resetRun() {
+  gameState = "playing";
+  waveNumber = 0;
+  waveTimer = 18;
+  trickleTimer = 5;
+  runStartTime = performance.now() / 1000;
+  buildHeart(false);
+  document.getElementById("vx-gameover")?.classList.remove("show");
+  updateHeartHud();
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
@@ -385,6 +575,15 @@ function updateZombieCombat(dt) {
       if (!b.fightTarget) b.fightTarget = a;
     }
   }
+  // Anyone not busy brawling turns its guns on the Heart when close enough —
+  // sieging the objective, not just each other.
+  if (heart && gameState === "playing") {
+    for (const m of monsters) {
+      if (m.fightTarget) continue;
+      const reach = EAT_DIST * 2.4 * stackScale(m.stackLevel);
+      if (Math.hypot(m.x - heart.x, m.z - heart.z) < reach) m.fightTarget = heart;
+    }
+  }
   for (const m of monsters) {
     if (!m.fightTarget) continue;
     m.attackTimer -= dt;
@@ -426,8 +625,10 @@ function fireZombieProjectile(shooter, target) {
 function updateZombieProjectiles(dt) {
   for (let i = zombieProjectiles.length - 1; i >= 0; i--) {
     const p = zombieProjectiles[i];
-    // Target already died/got eaten mid-flight: the blob fizzles out.
-    if (!monsters.includes(p.target)) {
+    // Target already died/got eaten mid-flight (or the run ended, for the
+    // Heart): the blob fizzles out.
+    const targetAlive = p.target.isHeart ? gameState === "playing" : monsters.includes(p.target);
+    if (!targetAlive) {
       root.remove(p.mesh);
       p.mesh.geometry.dispose();
       p.mesh.material.dispose();
@@ -441,14 +642,19 @@ function updateZombieProjectiles(dt) {
     if (dist <= Math.max(0.25, step)) {
       // Hit: damage after the target's flat armor (defenseFor, in DPS
       // terms — an attacker whose DPS doesn't clear it deals nothing),
-      // then resolve a possible kill.
+      // then resolve a possible kill. The Heart's stackLevel of 1 gives it
+      // zero armor, so every zombie always chips it.
       const effDmg = Math.max(0, (p.dps - defenseFor(p.target.stackLevel)) * p.interval);
-      p.target.hp -= effDmg;
       root.remove(p.mesh);
       p.mesh.geometry.dispose();
       p.mesh.material.dispose();
       zombieProjectiles.splice(i, 1);
-      if (p.target.hp <= 0) resolveZombieKill(p.shooter, p.target);
+      if (p.target.isHeart) {
+        damageHeart(effDmg);
+      } else {
+        p.target.hp -= effDmg;
+        if (p.target.hp <= 0) resolveZombieKill(p.shooter, p.target);
+      }
       continue;
     }
     p.mesh.position.x += (dx / dist) * step;
@@ -563,13 +769,21 @@ function updateMonsters(dt, now) {
     // Mid-fight (fightTarget set by updateZombieCombat, one frame behind):
     // plant feet and square up toward the opponent — all damage comes from
     // the projectiles, so a fighting zombie stands its ground and shoots.
-    const fighting = m.fightTarget && monsters.includes(m.fightTarget);
+    const fighting = m.fightTarget && (m.fightTarget.isHeart || monsters.includes(m.fightTarget));
     if (fighting) {
       m.angle = Math.atan2(m.fightTarget.x - m.x, m.fightTarget.z - m.z);
     } else {
       m.timer -= dt;
       if (m.timer <= 0) {
-        m.angle = Math.random() * Math.PI * 2;
+        // The siege instinct: most retargets head for the Heart (with some
+        // spread so the horde doesn't single-file), the rest wander — and
+        // the pull gets stronger as waves ramp up.
+        const heartBias = Math.min(0.85, 0.4 + waveNumber * 0.03);
+        if (heart && gameState === "playing" && Math.random() < heartBias) {
+          m.angle = Math.atan2(heart.x - m.x, heart.z - m.z) + (Math.random() - 0.5) * 0.9;
+        } else {
+          m.angle = Math.random() * Math.PI * 2;
+        }
         m.timer = 1.5 + Math.random() * 2.5;
       }
       const nx = m.x + Math.sin(m.angle) * m.speed * dt;
@@ -985,15 +1199,18 @@ function generateWorld(seed, biomeKey, keepZombies = false) {
   if (keepZombies) {
     // Fresh land, same population: keep every zombie (level, hp, eat-XP and
     // all) and just settle them onto the new ground where they stand. Score,
-    // XP and blast unlocks are untouched too.
+    // XP, blast unlocks — and the run itself (Heart damage, wave count) —
+    // are untouched: this is a mid-run terrain shuffle, not a restart.
     currentSeaLevel = biome.seaLevel;
     currentSeed = seed;
     for (const m of monsters) {
       m.fightTarget = null;
       Object.assign(m, initVerticalState(m.x, m.z));
     }
+    buildHeart(true); // re-seat the Heart on the new ground, keeping its HP
   } else {
     spawnMonsters(biome, currentHeights, seed);
+    resetRun(); // every brand-new world is a brand-new run
   }
 }
 
@@ -1288,6 +1505,14 @@ function explodeAt(bx, bz) {
   destroyTreesNear(bx, bz, maxUnlockedBlast);
   killMonstersNear(bx, bz, maxUnlockedBlast);
   rebuildBlockMeshes();
+
+  // Friendly fire: a blast landing near the Heart hurts it. Zombies swarm
+  // the crystal, so the tempting "just nuke the pile on top of it" play has
+  // a real cost — precision matters.
+  if (heart && Math.hypot(bx - heart.x, bz - heart.z) <= maxUnlockedBlast + 1) {
+    damageHeart(6);
+    showToast("⚠️ You hit the Heart!");
+  }
 
   shake = Math.min(4.5, shake + 0.25 + maxUnlockedBlast * 0.45);
   playExplosion(maxUnlockedBlast);
@@ -1663,6 +1888,8 @@ function init() {
     updateZombieBoard();
   });
 
+  document.getElementById("vx-go-restart").addEventListener("click", () => regenerate(true));
+
   regenerate(false);
   requestAnimationFrame(loop);
 }
@@ -1695,10 +1922,19 @@ function loop() {
   // No pan bounds — see the mouse-pan handler for why.
 
   shake *= Math.exp(-4.5 * dt);
-  processClickQueue();
-  updateMonsters(dt * simSpeed, now);
-  updateZombieCombat(dt * simSpeed);
-  processPendingSpawns(now);
+  // On defeat the sim freezes mid-tableau (no movement, fights, spawns, or
+  // player shots) behind the game-over overlay; camera and leftover fx keep
+  // running so the frozen battlefield still feels alive to orbit around.
+  if (gameState === "playing") {
+    processClickQueue();
+    updateMonsters(dt * simSpeed, now);
+    updateZombieCombat(dt * simSpeed);
+    processPendingSpawns(now);
+    updateWaves(dt * simSpeed);
+  } else {
+    clickQueue = [];
+  }
+  updateHeart(now);
   updateMissiles(dt);
   updateFx(dt);
   updateCamera();

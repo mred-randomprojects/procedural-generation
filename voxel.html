@@ -14,6 +14,22 @@
 <body>
   <div id="voxel-root"></div>
 
+  <div id="hud-heart" class="hud-panel">
+    <div class="hud-heart-row">
+      <span class="hud-heart-title">💎 The Heart</span>
+      <span id="vx-wave-val">Wave 0</span>
+    </div>
+    <div class="hud-heart-bar"><div id="vx-heart-fill"></div></div>
+  </div>
+
+  <div id="vx-gameover">
+    <div class="go-panel">
+      <h2>💔 The Heart has fallen</h2>
+      <div id="vx-go-stats"></div>
+      <button id="vx-go-restart">💎 Defend again</button>
+    </div>
+  </div>
+
   <div id="hud-score" class="hud-panel">
     <div class="hud-score-row">
       <span class="hud-label">🧟 Zombies killed</span>
