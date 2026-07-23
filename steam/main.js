@@ -19,6 +19,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
   win.loadFile(path.join(__dirname, "app", "voxel.html"));

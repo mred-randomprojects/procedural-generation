@@ -1,17 +1,40 @@
 # Procedural Worlds
 
 A self-contained browser demo of procedural generation techniques — noise-based
-terrain, wave function collapse, isometric 3D, and a full voxel Minecraft-style
-world you can blow up. No build step beyond loading Three.js from a CDN.
+terrain, wave function collapse, isometric 3D, and **Heartfall**, a full voxel
+tower-defense game. No build step beyond loading Three.js from a CDN.
 
 **Run it:** open `index.html` directly, or serve the folder
 (`python3 -m http.server 8123` → http://localhost:8123).
 
+**Test it:** `npm test` (Node ≥ 18; runs the game-logic suite in `tests/`).
+
 - `index.html` — noise terrain + wave function collapse (2D)
 - `3d.html` — Skylands: isometric voxel archipelago with missiles
-- `voxel.html` — **Voxel Worlds**: full 3D Minecraft-style biomes (Three.js),
-  free camera, wandering zombies you can blast with missiles (they merge into
-  tougher elites, drop money, and respawn), craters that heal over time
+- `voxel.html` — **💎 Heartfall**: defend the Heart against an evolving
+  voxel zombie horde (see below)
+
+## Heartfall (voxel.html)
+
+A complete siege-defense game on procedurally generated voxel terrain:
+
+- **The loop** — zombies invade in escalating waves and eat each other to
+  evolve; you call down missiles (destructible terrain, permanent craters),
+  build turrets, bury mines and trigger slow-fields to keep the Heart alive.
+- **Kill combos** — chained kills inside a 4-second window multiply every
+  payout, uncapped.
+- **Boss waves** — every 5th wave lands a crowned colossus with an energy
+  bounty; let the horde eat it and its power passes on.
+- **Contracts** — three optional objectives per run paying instant energy
+  plus banked shards.
+- **Modes** — 🏆 Ranked (scored, canonical balance), 📅 Daily Challenge
+  (one fixed world per UTC day, per-day scoreboard, play streaks) and
+  🧪 Sandbox (every knob unlocked, nothing saved).
+- **Legacy** — permanent cross-run perks bought with shards earned every
+  run: Heart HP, starting energy, blast radius, turret damage, opening
+  minefields, shard gain.
+- **16 achievements**, lifetime stats, and a Steam-ready Electron shell in
+  `steam/` (see `steam/README.md`).
 
 ## Tab 1 — 🌍 Noise World (how Minecraft-style terrain works)
 
@@ -48,3 +71,10 @@ into superposition and re-collapses ("heals") around your choice.
 - `js/render.js` — pixel renderer, hillshading, houses & labels
 - `js/wfc.js` — WFC model (bitmask domains, entropy cache, propagation)
 - `js/main.js` — UI wiring, WFC animation loop, painting
+- `js/heartfall-core.js` — every Heartfall balance curve and game rule as
+  pure functions (no DOM/THREE), covered by `tests/heartfall-core.test.mjs`
+- `js/voxel-gen.js` — the Heartfall game itself (world gen, sim, rendering,
+  input, HUD)
+- `js/voxel-textures.js`, `js/voxel-audio.js` — procedural block/zombie
+  textures and the synthesized SFX kit
+- `steam/` — Electron shell + `build.sh` staging script for Steam depots

@@ -235,6 +235,9 @@ function unlockAchievement(key) {
   if (unlockedAchievements[key]) return;
   unlockedAchievements[key] = true;
   try { localStorage.setItem("vx-achievements", JSON.stringify(unlockedAchievements)); } catch { /* oh well */ }
+  // Desktop builds bridge unlocks to Steamworks via the Electron preload
+  // (steam/preload.js); on the plain web build the bridge doesn't exist.
+  try { window.heartfallBridge?.unlockAchievement?.(key); } catch { /* web build */ }
   showToast(ACHIEVEMENTS[key]);
   playPurchase(); // reuse the reward chime
 }
@@ -2851,6 +2854,12 @@ function init() {
   // unlockAudio. Every pointerdown re-checks, which also recovers the
   // context after an iOS audio-session interruption.
   window.addEventListener("pointerdown", unlockAudio);
+
+  // Real-game behavior: losing the tab/window (alt-tab, phone lock, Steam
+  // overlay) auto-pauses instead of letting the Heart die unattended.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && gameState === "playing") togglePause();
+  });
 
   // Title screen: play, difficulty, settings — controls seeded from the
   // persisted settings so the menu reflects what's actually active.
