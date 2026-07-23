@@ -187,6 +187,7 @@ function spawnMonsters(biome, heights, seed) {
     clearGroup(monsterUiGroup);
   }
   monsters = [];
+  pendingSpawns = []; // don't let a queued respawn from the old world pop into the new one
   currentHeights = heights;
   currentSeaLevel = biome.seaLevel;
   currentSeed = seed;
@@ -238,7 +239,7 @@ function spawnRandomZombie() {
   monsters.push({
     rig, mats, x, z,
     angle: Math.random() * Math.PI * 2,
-    speed: 1.0 + Math.random() * 1.0,
+    speed: stackSpeed(1) + Math.random() * 0.2,
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
@@ -247,6 +248,28 @@ function spawnRandomZombie() {
     ...createMonsterUi(),
   });
   updateZombieBoard();
+}
+
+// Replacement spawns go through this queue instead of appearing instantly, so
+// the HUD "Respawn" control can delay them — or, on "off", stop production
+// entirely (queued and future spawns are simply dropped), which starves the
+// map of fresh level 1s and lets the big zombies' dominance actually play out
+// instead of being endlessly diluted.
+let spawnDelay = 0; // seconds; Infinity = production stopped
+let pendingSpawns = []; // due-timestamps (seconds, performance.now() clock)
+
+function queueZombieSpawn() {
+  if (!isFinite(spawnDelay)) return;
+  if (spawnDelay <= 0) { spawnRandomZombie(); return; }
+  pendingSpawns.push(performance.now() / 1000 + spawnDelay);
+}
+
+function processPendingSpawns(now) {
+  if (pendingSpawns.length === 0) return;
+  const due = pendingSpawns.filter((t) => t <= now);
+  if (due.length === 0) return;
+  pendingSpawns = pendingSpawns.filter((t) => t > now);
+  for (let i = 0; i < due.length; i++) spawnRandomZombie();
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
@@ -334,7 +357,11 @@ function updateZombieCombat(dt) {
     const a = monsters[i];
     for (let j = i + 1; j < monsters.length; j++) {
       const b = monsters[j];
-      if (Math.hypot(a.x - b.x, a.z - b.z) >= EAT_DIST) continue;
+      // Reach scales with each fighter's body size (stackScale), so a big
+      // high-level zombie starts landing hits from further out — it doesn't
+      // need to physically overlap a runt to grab it.
+      const reach = EAT_DIST * (stackScale(a.stackLevel) + stackScale(b.stackLevel)) / 2;
+      if (Math.hypot(a.x - b.x, a.z - b.z) >= reach) continue;
       a.hp -= b.stackLevel * dt;
       b.hp -= a.stackLevel * dt;
       const aDead = a.hp <= 0, bDead = b.hp <= 0;
@@ -366,8 +393,9 @@ function eatZombie(winner, loser) {
   spawnEatFx(lx, heightAt(lx, lz) + 1, lz);
   spawnGibs(lx, heightAt(lx, lz) + 0.9, lz);
 
-  // Replace the loser 1-for-1 so this encounter is population-neutral.
-  spawnRandomZombie();
+  // Replace the loser 1-for-1 so this encounter is population-neutral
+  // (subject to the HUD Respawn delay/off control).
+  queueZombieSpawn();
 
   // A quick lunge toward the kill spot sells the "eating" motion.
   winner.x += (lx - winner.x) * 0.5;
@@ -553,7 +581,7 @@ function killMonstersNear(bx, bz, r) {
     // No cap, intentionally — see the "no artificial limits" note near
     // MONSTER_COUNT. Every kill spawns 2 more, unconditionally, forever.
     let toSpawn = kills * 2;
-    while (toSpawn-- > 0) spawnRandomZombie();
+    while (toSpawn-- > 0) queueZombieSpawn();
   }
 }
 
@@ -1469,6 +1497,12 @@ function init() {
     if (!locateEliteOn) hideAllEliteMarkers();
   });
 
+  document.getElementById("vx-spawn-delay").addEventListener("change", (e) => {
+    const v = e.target.value;
+    spawnDelay = v === "off" ? Infinity : Number(v);
+    if (!isFinite(spawnDelay)) pendingSpawns = []; // turning production off also drops what's queued
+  });
+
   regenerate(false);
   requestAnimationFrame(loop);
 }
@@ -1505,6 +1539,7 @@ function loop() {
   processClickQueue();
   updateMonsters(dt, now);
   updateZombieCombat(dt);
+  processPendingSpawns(now);
   updateMissiles(dt);
   updateFx(dt);
   updateCamera();

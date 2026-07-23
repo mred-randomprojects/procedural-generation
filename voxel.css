@@ -83,7 +83,7 @@ html, body {
   color: #ffcbb8;
 }
 
-#vx-biome {
+#vx-biome, #vx-spawn-delay {
   width: 100%;
   background: rgba(16, 21, 27, 0.8);
   color: #e6ebf1;
