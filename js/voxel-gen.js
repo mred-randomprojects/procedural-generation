@@ -88,7 +88,7 @@ let lastBlastX = 0, lastBlastZ = 0;
 
 let raycaster, missiles = [], fx = [];
 let missileGeo, missileMat;
-let aimOuter, aimInner, hoverClientX = null, hoverClientY = null;
+let aimLightOuter, aimLightInner, hoverClientX = null, hoverClientY = null;
 
 function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
@@ -184,6 +184,7 @@ function spawnMonsters(biome, heights, seed) {
   xp = 0;
   maxUnlockedBlast = STARTING_MAX_BLAST;
   updateScoreHud();
+  updateZombieBoard();
 }
 
 // Spawns one fresh zombie at a random valid spot — used to replace a killed one.
@@ -209,18 +210,18 @@ function spawnRandomZombie() {
     hp: 1, stackLevel: 1,
     ...initVerticalState(x, z),
   });
+  updateZombieBoard();
 }
 
-const MAX_STACK = 10;
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
 function stackSpeed(level) { return Math.max(0.32, 1.0 - (level - 1) * 0.07); }
 
-// Zombies that wander into each other fuse into one bigger, tougher stacked
-// zombie — each layer adds one required hit and visibly grows it, up to a
-// towering stack of 10.
+// Zombies of the SAME level that wander into each other fuse into one
+// zombie one level higher (1+1→2, 2+2→3, 3+3→4, ...), with no ceiling —
+// each level adds one required hit and visibly grows it further.
 function mergeZombies(a, b) {
   const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
-  const level = Math.min(MAX_STACK, a.stackLevel + b.stackLevel);
+  const level = a.stackLevel + 1;
   monsterGroup.remove(a.rig.root, b.rig.root);
   disposeZombieMaterials(a.mats);
   disposeZombieMaterials(b.mats);
@@ -243,15 +244,15 @@ function mergeZombies(a, b) {
     hp: level, stackLevel: level,
     ...initVerticalState(mx, mz),
   });
+  updateZombieBoard();
 }
 
 function checkZombieMerges() {
   for (let i = 0; i < monsters.length; i++) {
     const a = monsters[i];
-    if (a.stackLevel >= MAX_STACK) continue;
     for (let j = i + 1; j < monsters.length; j++) {
       const b = monsters[j];
-      if (a.stackLevel + b.stackLevel > MAX_STACK) continue;
+      if (a.stackLevel !== b.stackLevel) continue;
       if (Math.hypot(a.x - b.x, a.z - b.z) < MERGE_DIST) {
         mergeZombies(a, b);
         return; // arrays mutated — resume scanning next frame
@@ -277,6 +278,22 @@ function updateScoreHud() {
   const pct = Math.max(0, Math.min(1, (xp - prevCost) / (nextCost - prevCost)));
   if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
   if (nextEl) nextEl.textContent = `${xp} / ${nextCost} XP → radius ${maxUnlockedBlast + 1}`;
+}
+
+// "Board" panel: how many zombies currently exist at each stack level.
+function updateZombieBoard() {
+  const el = document.getElementById("vx-board-list");
+  if (!el) return;
+  const counts = new Map();
+  for (const m of monsters) counts.set(m.stackLevel, (counts.get(m.stackLevel) || 0) + 1);
+  const levels = [...counts.keys()].sort((a, b) => a - b);
+  if (levels.length === 0) {
+    el.innerHTML = `<div class="hud-board-empty">No zombies left</div>`;
+    return;
+  }
+  el.innerHTML = levels
+    .map((lv) => `<div class="hud-board-row"><span>Lvl ${lv}</span><span>${counts.get(lv)}</span></div>`)
+    .join("");
 }
 
 // Bigger blast radii unlock permanently as you earn more XP, with no ceiling —
@@ -614,9 +631,6 @@ function generateWorld(seed, biomeKey) {
 
 /* ---------- missiles & explosions ---------- */
 
-const MISSILE_COOLDOWN = 0.5;
-let lastFireTime = -999;
-
 function raycastGround(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   const ndc = new THREE.Vector2(
@@ -628,33 +642,31 @@ function raycastGround(clientX, clientY) {
   return hits.length ? hits[0].point : null;
 }
 
+// No cooldown — every valid click queues its own missile immediately, so N
+// quick clicks always land exactly N shots.
 function tryFireMissile(clientX, clientY) {
-  const now = performance.now() / 1000;
-  if (now - lastFireTime < MISSILE_COOLDOWN) return;
   const point = raycastGround(clientX, clientY);
   if (!point) return;
-  lastFireTime = now;
   fireMissile(point.x, point.y, point.z);
 }
 
-// Ground-projected preview of where a missile would land: an outer ring for
-// the full blast radius and a brighter inner disc for the double-damage core.
+// Preview of where a missile would land: a warm glow hovering over the spot,
+// sized to the blast radius, with a brighter/tighter hotspot for the
+// double-damage core. Lights have no ground geometry to clip through or
+// z-fight with, so this stays correct over any terrain shape automatically —
+// a flat ground-decal mesh kept skewing/clipping under uneven terrain.
 function updateAimIndicator() {
-  if (hoverClientX === null || !blockMeshes) return;
+  if (hoverClientX === null || !blockMeshes) { aimLightOuter.intensity = aimLightInner.intensity = 0; return; }
   const point = raycastGround(hoverClientX, hoverClientY);
-  if (!point) { aimOuter.visible = aimInner.visible = false; return; }
-  const y = heightAt(point.x, point.z) + 0.52;
+  if (!point) { aimLightOuter.intensity = aimLightInner.intensity = 0; return; }
   const coreR = Math.floor(maxUnlockedBlast / 2);
-  aimOuter.position.set(point.x, y, point.z);
-  aimOuter.scale.set(maxUnlockedBlast, maxUnlockedBlast, 1);
-  aimOuter.visible = true;
-  if (coreR > 0) {
-    aimInner.position.set(point.x, y + 0.01, point.z);
-    aimInner.scale.set(coreR, coreR, 1);
-    aimInner.visible = true;
-  } else {
-    aimInner.visible = false;
-  }
+  const y = point.y + 1.4;
+  aimLightOuter.position.set(point.x, y, point.z);
+  aimLightOuter.distance = maxUnlockedBlast * 2.6 + 4;
+  aimLightOuter.intensity = 60; // PointLight uses photometric (candela) units — needs to be large to read
+  aimLightInner.position.set(point.x, y - 0.6, point.z);
+  aimLightInner.distance = Math.max(2, coreR * 2.4 + 2);
+  aimLightInner.intensity = coreR > 0 ? 110 : 0;
 }
 
 function fireMissile(tx, ty, tz) {
@@ -999,25 +1011,14 @@ function init() {
   missileGeo.rotateX(-Math.PI / 2); // tip points toward -Z so lookAt() aims it correctly
   missileMat = new THREE.MeshLambertMaterial({ color: 0x445055 });
 
-  // Ground-projected blast-radius preview that follows the mouse; unit circles
-  // scaled per-frame to the current (outer) and core double-damage (inner) radius.
-  const circleGeo = new THREE.CircleGeometry(1, 48);
-  // depthTest: false so the preview always paints on top of the terrain
-  // instead of getting hidden behind higher blocks under part of the circle.
-  const outerMat = new THREE.MeshBasicMaterial({
-    color: 0xff9a3c, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
-    depthWrite: false, depthTest: false,
-  });
-  const innerMat = new THREE.MeshBasicMaterial({
-    color: 0xff3b2e, transparent: true, opacity: 0.28, side: THREE.DoubleSide,
-    depthWrite: false, depthTest: false,
-  });
-  aimOuter = new THREE.Mesh(circleGeo, outerMat);
-  aimInner = new THREE.Mesh(circleGeo, innerMat);
-  aimOuter.visible = aimInner.visible = false;
-  aimOuter.renderOrder = 998;
-  aimInner.renderOrder = 999;
-  root.add(aimOuter, aimInner);
+  // Blast-radius preview that follows the mouse: two warm point lights (a
+  // wide dim one for the full radius, a tight bright one for the
+  // double-damage core) instead of a ground-decal mesh — lights can't clip
+  // through or z-fight with terrain, so this is immune to the skewing/
+  // under-terrain glitches a flat plane had over uneven ground.
+  aimLightOuter = new THREE.PointLight(0xff9a3c, 0, 10, 2);
+  aimLightInner = new THREE.PointLight(0xff3b2e, 0, 6, 2);
+  root.add(aimLightOuter, aimLightInner);
 
   camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 300);
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1061,7 +1062,7 @@ function init() {
   });
   canvas.addEventListener("mouseleave", () => {
     hoverClientX = null; hoverClientY = null;
-    aimOuter.visible = aimInner.visible = false;
+    aimLightOuter.intensity = aimLightInner.intensity = 0;
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
