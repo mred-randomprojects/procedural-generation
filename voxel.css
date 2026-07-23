@@ -61,6 +61,62 @@ html, body {
 #vx-heart-fill.hurt { background: linear-gradient(90deg, #ff9a3c, #ffcf5a); }
 #vx-heart-fill.critical { background: linear-gradient(90deg, #ff3b30, #ff7a5c); }
 
+#vx-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(255, 40, 20, 0.45) 100%);
+  transition: opacity 0.35s ease;
+}
+#vx-vignette.flash { opacity: 1; transition: opacity 0.05s ease; }
+
+#vx-paused {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 12, 0.5);
+  z-index: 35;
+}
+#vx-paused.show { display: flex; }
+.paused-panel {
+  background: rgba(16, 21, 28, 0.95);
+  border: 1px solid rgba(120, 220, 255, 0.4);
+  border-radius: 12px;
+  padding: 16px 28px;
+  color: #9fe8ff;
+  font-size: 17px;
+}
+
+#hud-shop {
+  bottom: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+}
+#hud-shop button {
+  background: #16281c;
+  color: #b8f5c9;
+  border: 1px solid #2e9650;
+  border-radius: 9px;
+  padding: 8px 14px;
+  font-size: 13.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#hud-shop button:hover:not(:disabled) { filter: brightness(1.3); }
+#hud-shop button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+.shop-cost { color: #ffcf5a; font-weight: 700; margin-left: 4px; }
+
 #vx-gameover {
   position: absolute;
   inset: 0;

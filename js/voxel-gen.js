@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import { buildBlockMaterials, disposeBlockMaterials, buildZombieMaterials, disposeZombieMaterials } from "./voxel-textures.js";
-import { playExplosion, playZombieKill } from "./voxel-audio.js";
+import {
+  playExplosion, playZombieKill, playHeartHit, playWaveStart,
+  playGameOver, playPurchase, playTurretShot,
+} from "./voxel-audio.js";
 
 /* ---------- Biome presets ---------- */
 
@@ -118,9 +121,18 @@ let highlightGeo, highlightOuterMat, highlightCoreMat, hoverClientX = null, hove
 // (defenseFor(1) === 0) — every zombie can always hurt the Heart.
 const HEART_MAX_HP = 100;
 let heart = null; // { isHeart, x, z, y, visualY, stackLevel, hp, group, crystal, glow, light }
-let gameState = "playing"; // "playing" | "over"
+let gameState = "playing"; // "playing" | "paused" | "over"
 let waveNumber = 0, waveTimer = 18, trickleTimer = 5;
 let runStartTime = 0; // seconds (performance.now() clock) when the current run began
+let lastHeartHitSound = 0; // throttle: a swarm chips the Heart every frame, the alarm shouldn't
+
+// ⚡ Energy: the run's spendable currency, earned 1:1 with XP from kills but
+// tracked separately — XP is a lifetime total that drives blast-radius
+// unlocks and must never decrease, while energy is drained by shop purchases.
+let energy = 0;
+let repairCost = 50, turretCost = 120;
+let turrets = []; // { x, z, y, group, head, cooldown }
+let turretBolts = []; // { mesh, target }
 
 function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
@@ -232,10 +244,26 @@ function updateHeartHud() {
   fill.classList.toggle("critical", frac <= 0.3);
 }
 
+let vignetteTimer = null;
 function damageHeart(amount) {
   if (!heart || gameState !== "playing") return;
   heart.hp -= amount;
   updateHeartHud();
+
+  // Red edge-of-screen flash + throttled alarm so damage is FELT even while
+  // the player is staring at a fight on the other side of the map.
+  const vignette = document.getElementById("vx-vignette");
+  if (vignette) {
+    vignette.classList.add("flash");
+    clearTimeout(vignetteTimer);
+    vignetteTimer = setTimeout(() => vignette.classList.remove("flash"), 90);
+  }
+  const now = performance.now() / 1000;
+  if (now - lastHeartHitSound > 0.35) {
+    lastHeartHitSound = now;
+    playHeartHit();
+  }
+
   if (heart.hp <= 0) endRun();
 }
 
@@ -401,6 +429,7 @@ function updateWaves(dt) {
     waveTimer = Math.max(10, 22 - waveNumber * 0.5);
     const count = 2 + waveNumber;
     for (let i = 0; i < count; i++) spawnRandomZombie(true);
+    playWaveStart();
     showToast(`🌊 Wave ${waveNumber} — ${count} invaders!`);
     updateHeartHud();
   }
@@ -427,6 +456,8 @@ function endRun() {
     best = Number(localStorage.getItem("vx-best-score") || 0);
     if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
   } catch { /* storage may be unavailable; the run still ends cleanly */ }
+
+  playGameOver();
 
   // A last blast of drama at the Heart as it shatters.
   if (heart) {
@@ -456,8 +487,181 @@ function resetRun() {
   trickleTimer = 5;
   runStartTime = performance.now() / 1000;
   buildHeart(false);
+  clearTurrets();
+  energy = 0;
+  repairCost = 50;
+  turretCost = 120;
   document.getElementById("vx-gameover")?.classList.remove("show");
+  document.getElementById("vx-paused")?.classList.remove("show");
   updateHeartHud();
+  updateShopHud();
+}
+
+/* ---------- shop: spend energy on defenses ---------- */
+
+// Both purchases escalate in price each time so the run stays a resource
+// squeeze: cheap early saves, increasingly costly late-game lifelines.
+function updateShopHud() {
+  const repairBtn = document.getElementById("vx-shop-repair");
+  const turretBtn = document.getElementById("vx-shop-turret");
+  const repairCostEl = document.getElementById("vx-repair-cost");
+  const turretCostEl = document.getElementById("vx-turret-cost");
+  if (repairCostEl) repairCostEl.textContent = `${repairCost}⚡`;
+  if (turretCostEl) turretCostEl.textContent = `${turretCost}⚡`;
+  if (repairBtn) repairBtn.disabled = gameState !== "playing" || energy < repairCost || !heart || heart.hp >= HEART_MAX_HP;
+  if (turretBtn) turretBtn.disabled = gameState !== "playing" || energy < turretCost;
+}
+
+function buyRepair() {
+  if (gameState !== "playing" || energy < repairCost || !heart || heart.hp >= HEART_MAX_HP) return;
+  energy -= repairCost;
+  repairCost = Math.round(repairCost * 1.5);
+  heart.hp = Math.min(HEART_MAX_HP, heart.hp + 30);
+  playPurchase();
+  spawnEatFx(heart.x, heart.y + 1.2, heart.z); // reuse the flash/ring as a "heal burst"
+  updateHeartHud();
+  updateScoreHud();
+}
+
+function buyTurret() {
+  if (gameState !== "playing" || energy < turretCost) return;
+  energy -= turretCost;
+  turretCost = Math.round(turretCost * 1.6);
+  buildTurret();
+  playPurchase();
+  updateScoreHud();
+}
+
+/* ---------- turrets: automated defense ---------- */
+
+const TURRET_RANGE = 8;
+const TURRET_COOLDOWN = 0.8;
+const TURRET_DMG = 1; // flat, ignores zombie armor — turrets are tech, like blasts
+
+// Each new turret takes the next slot on a ring around the Heart (golden-
+// angle spacing so any count spreads evenly without overlapping).
+function buildTurret() {
+  const idx = turrets.length;
+  const angle = idx * 2.399963; // golden angle in radians
+  const ringR = 3.2 + (idx % 3) * 0.8;
+  const x = heart.x + Math.sin(angle) * ringR;
+  const z = heart.z + Math.cos(angle) * ringR;
+  const y = heightAt(x, z) + 0.5;
+
+  const group = new THREE.Group();
+  const post = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16, 0.22, 1.1, 6),
+    new THREE.MeshLambertMaterial({ color: 0x4a5a68 })
+  );
+  post.position.y = 0.55;
+  group.add(post);
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.42, 0.3, 0.42),
+    new THREE.MeshLambertMaterial({ color: 0x77e0a8, emissive: 0x1c4a30 })
+  );
+  head.position.y = 1.2;
+  group.add(head);
+  group.position.set(x, y, z);
+  root.add(group);
+
+  turrets.push({ x, z, y, group, head, cooldown: 0 });
+}
+
+function clearTurrets() {
+  for (const t of turrets) {
+    root.remove(t.group);
+    t.group.traverse((o) => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
+  }
+  turrets = [];
+  for (const b of turretBolts) {
+    root.remove(b.mesh);
+    b.mesh.geometry.dispose();
+    b.mesh.material.dispose();
+  }
+  turretBolts = [];
+}
+
+// Re-seat turrets on new ground after a keep-zombies terrain regen.
+function reseatTurrets() {
+  for (const t of turrets) {
+    t.y = heightAt(t.x, t.z) + 0.5;
+    t.group.position.y = t.y;
+  }
+}
+
+function updateTurrets(dt) {
+  for (const t of turrets) {
+    t.cooldown -= dt;
+    // Track + shoot the nearest zombie in range.
+    let best = null, bestD = TURRET_RANGE;
+    for (const m of monsters) {
+      const d = Math.hypot(m.x - t.x, m.z - t.z);
+      if (d < bestD) { best = m; bestD = d; }
+    }
+    if (!best) continue;
+    t.head.rotation.y = Math.atan2(best.x - t.x, best.z - t.z);
+    if (t.cooldown > 0) continue;
+    t.cooldown = TURRET_COOLDOWN;
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 6, 5),
+      new THREE.MeshBasicMaterial({
+        color: 0x7fffd0, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    mesh.position.set(t.x, t.y + 1.2, t.z);
+    root.add(mesh);
+    turretBolts.push({ mesh, target: best });
+    playTurretShot();
+  }
+
+  for (let i = turretBolts.length - 1; i >= 0; i--) {
+    const b = turretBolts[i];
+    if (!monsters.includes(b.target)) {
+      root.remove(b.mesh);
+      b.mesh.geometry.dispose();
+      b.mesh.material.dispose();
+      turretBolts.splice(i, 1);
+      continue;
+    }
+    const ty = b.target.visualY + 0.9 * stackScale(b.target.stackLevel);
+    const dx = b.target.x - b.mesh.position.x, dy = ty - b.mesh.position.y, dz = b.target.z - b.mesh.position.z;
+    const dist = Math.hypot(dx, dy, dz);
+    const step = 30 * dt;
+    if (dist <= Math.max(0.25, step)) {
+      b.target.hp -= TURRET_DMG;
+      root.remove(b.mesh);
+      b.mesh.geometry.dispose();
+      b.mesh.material.dispose();
+      turretBolts.splice(i, 1);
+      if (b.target.hp <= 0) killZombieByPlayer(b.target);
+      continue;
+    }
+    b.mesh.position.x += (dx / dist) * step;
+    b.mesh.position.y += (dy / dist) * step;
+    b.mesh.position.z += (dz / dist) * step;
+  }
+}
+
+// A single player-credited kill (turret bolt finished a zombie off): same
+// rewards and respawn rules as a blast kill, minus the area logic.
+function killZombieByPlayer(m) {
+  if (!monsters.includes(m)) return;
+  monsterGroup.remove(m.rig.root);
+  disposeZombieMaterials(m.mats);
+  disposeMonsterUi(m);
+  spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
+  monsters.splice(monsters.indexOf(m), 1);
+  playZombieKill(1);
+  killCount++;
+  const earned = m.stackLevel * 10;
+  xp += earned;
+  energy += earned;
+  updateScoreHud();
+  checkBlastUnlocks();
+  let toSpawn = spawnsPerKill;
+  while (toSpawn-- > 0) queueZombieSpawn();
+  updateZombieBoard();
 }
 
 function stackScale(level) { return 1 + (level - 1) * 0.3; }
@@ -709,6 +913,10 @@ function updateScoreHud() {
   const killEl = document.getElementById("vx-score-val");
   if (killEl) killEl.textContent = String(killCount);
 
+  const energyEl = document.getElementById("vx-energy-val");
+  if (energyEl) energyEl.textContent = String(energy);
+  updateShopHud();
+
   const radiusEl = document.getElementById("vx-radius-val");
   if (radiusEl) radiusEl.textContent = String(maxUnlockedBlast);
 
@@ -883,6 +1091,7 @@ function killMonstersNear(bx, bz, r) {
     playZombieKill(kills);
     killCount += kills;
     xp += earned;
+    energy += earned; // spendable twin of the XP payout — see the energy declaration
     updateScoreHud();
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
@@ -1208,6 +1417,7 @@ function generateWorld(seed, biomeKey, keepZombies = false) {
       Object.assign(m, initVerticalState(m.x, m.z));
     }
     buildHeart(true); // re-seat the Heart on the new ground, keeping its HP
+    reseatTurrets();
   } else {
     spawnMonsters(biome, currentHeights, seed);
     resetRun(); // every brand-new world is a brand-new run
@@ -1826,6 +2036,7 @@ function init() {
   window.addEventListener("keydown", (e) => {
     keys[e.key.toLowerCase()] = true;
     if (e.key.toLowerCase() === "r") regenerate(true);
+    if (e.key.toLowerCase() === "p") togglePause();
   });
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -1889,6 +2100,8 @@ function init() {
   });
 
   document.getElementById("vx-go-restart").addEventListener("click", () => regenerate(true));
+  document.getElementById("vx-shop-repair").addEventListener("click", buyRepair);
+  document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
 
   regenerate(false);
   requestAnimationFrame(loop);
@@ -1922,23 +2135,42 @@ function loop() {
   // No pan bounds — see the mouse-pan handler for why.
 
   shake *= Math.exp(-4.5 * dt);
-  // On defeat the sim freezes mid-tableau (no movement, fights, spawns, or
-  // player shots) behind the game-over overlay; camera and leftover fx keep
-  // running so the frozen battlefield still feels alive to orbit around.
+  // On defeat or pause the sim freezes mid-tableau (no movement, fights,
+  // spawns, or player shots) behind the overlay; camera stays free so the
+  // frozen battlefield can still be orbited. Missiles/fx also freeze while
+  // paused (a true pause), but keep playing out on defeat for drama.
   if (gameState === "playing") {
     processClickQueue();
     updateMonsters(dt * simSpeed, now);
     updateZombieCombat(dt * simSpeed);
+    updateTurrets(dt * simSpeed);
     processPendingSpawns(now);
     updateWaves(dt * simSpeed);
   } else {
     clickQueue = [];
   }
-  updateHeart(now);
-  updateMissiles(dt);
-  updateFx(dt);
+  if (gameState !== "paused") {
+    updateHeart(now);
+    updateMissiles(dt);
+    updateFx(dt);
+  }
   updateCamera();
   renderer.render(scene, camera);
+}
+
+let pauseStartedAt = 0;
+function togglePause() {
+  if (gameState === "over") return;
+  const now = performance.now() / 1000;
+  if (gameState === "paused") {
+    gameState = "playing";
+    runStartTime += now - pauseStartedAt; // paused time doesn't count as survival
+  } else {
+    gameState = "paused";
+    pauseStartedAt = now;
+  }
+  document.getElementById("vx-paused")?.classList.toggle("show", gameState === "paused");
+  updateShopHud();
 }
 
 // version.json is generated by the deploy workflow (stamped with the commit

@@ -147,6 +147,119 @@ export function playExplosion(radius = 3) {
   if (radius > 8) playGlitchLayer(c, master, t0, radius);
 }
 
+// Dull warning thump + short dissonant alarm blip for the Heart taking a
+// hit — urgent but quiet enough to not wear the player down when a horde is
+// chipping away every second. Callers should throttle repeat plays.
+export function playHeartHit() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 0.8;
+  master.connect(c.destination);
+
+  const thump = c.createOscillator();
+  thump.type = "sine";
+  thump.frequency.setValueAtTime(220, t0);
+  thump.frequency.exponentialRampToValueAtTime(70, t0 + 0.12);
+  const thumpGain = envGain(c, master, t0, 0.004, 0.18, 0.9);
+  thump.connect(thumpGain);
+  thump.start(t0);
+  thump.stop(t0 + 0.25);
+
+  const alarm = c.createOscillator();
+  alarm.type = "triangle";
+  alarm.frequency.setValueAtTime(640, t0 + 0.02);
+  alarm.frequency.exponentialRampToValueAtTime(430, t0 + 0.14);
+  const alarmGain = envGain(c, master, t0 + 0.02, 0.008, 0.16, 0.35);
+  alarm.connect(alarmGain);
+  alarm.start(t0 + 0.02);
+  alarm.stop(t0 + 0.22);
+}
+
+// Rising two-note horn — a new wave is arriving.
+export function playWaveStart() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 0.9;
+  master.connect(c.destination);
+
+  for (const [start, from, to] of [[0, 196, 262], [0.16, 262, 392]]) {
+    const horn = c.createOscillator();
+    horn.type = "sawtooth";
+    horn.frequency.setValueAtTime(from, t0 + start);
+    horn.frequency.exponentialRampToValueAtTime(to, t0 + start + 0.14);
+    const filt = c.createBiquadFilter();
+    filt.type = "lowpass";
+    filt.frequency.value = 1400;
+    const g = envGain(c, master, t0 + start, 0.02, 0.3, 0.5);
+    horn.connect(filt);
+    filt.connect(g);
+    horn.start(t0 + start);
+    horn.stop(t0 + start + 0.4);
+  }
+}
+
+// Slow descending three-note dirge + deep rumble: the Heart has fallen.
+export function playGameOver() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 1.1;
+  master.connect(c.destination);
+
+  const notes = [392, 311, 233];
+  notes.forEach((freq, i) => {
+    const t = t0 + i * 0.35;
+    const osc = c.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(freq, t);
+    const g = envGain(c, master, t, 0.02, 0.5, 0.5);
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(t + 0.6);
+  });
+  darkNoise(c, master, 2.2, 300, 50, 1.2, t0 + 0.2, 0.1, 2.0, 0.5);
+}
+
+// Bright little coin/upgrade chime for a successful shop purchase.
+export function playPurchase() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 0.9;
+  master.connect(c.destination);
+
+  for (const [start, freq] of [[0, 880], [0.09, 1318]]) {
+    const osc = c.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(freq, t0 + start);
+    const g = envGain(c, master, t0 + start, 0.005, 0.18, 0.45);
+    osc.connect(g);
+    osc.start(t0 + start);
+    osc.stop(t0 + start + 0.25);
+  }
+}
+
+// Tiny electric zap for a turret shot — deliberately short and quiet, since
+// several turrets can be firing near-continuously.
+export function playTurretShot() {
+  const c = getCtx();
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 0.32;
+  master.connect(c.destination);
+
+  const zap = c.createOscillator();
+  zap.type = "square";
+  zap.frequency.setValueAtTime(1900, t0);
+  zap.frequency.exponentialRampToValueAtTime(500, t0 + 0.05);
+  const g = envGain(c, master, t0, 0.002, 0.05, 0.5);
+  zap.connect(g);
+  zap.start(t0);
+  zap.stop(t0 + 0.08);
+}
+
 // A loud, satisfying pop/splat + descending groan + low impact thud for a
 // zombie kill. Gets a little louder/beefier for multi-kills (count > 1).
 export function playZombieKill(count = 1) {

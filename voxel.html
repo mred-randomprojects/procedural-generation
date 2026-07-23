@@ -30,10 +30,25 @@
     </div>
   </div>
 
+  <div id="vx-vignette"></div>
+
+  <div id="vx-paused">
+    <div class="paused-panel">⏸ Paused — press P to resume</div>
+  </div>
+
+  <div id="hud-shop" class="hud-panel">
+    <button id="vx-shop-repair" title="Restore 30 Heart HP">🔧 Repair <span class="shop-cost" id="vx-repair-cost">50⚡</span></button>
+    <button id="vx-shop-turret" title="Build an auto-firing turret near the Heart">🗼 Turret <span class="shop-cost" id="vx-turret-cost">120⚡</span></button>
+  </div>
+
   <div id="hud-score" class="hud-panel">
     <div class="hud-score-row">
       <span class="hud-label">🧟 Zombies killed</span>
       <span id="vx-score-val">0</span>
+    </div>
+    <div class="hud-score-row">
+      <span class="hud-label">⚡ Energy</span>
+      <span id="vx-energy-val">0</span>
     </div>
     <div class="hud-xp-block">
       <div class="hud-score-row">
@@ -147,7 +162,7 @@
 
   <div id="hud-hint" class="hud-panel">
     Drag — rotate &nbsp;·&nbsp; ⌘/⌥ + drag — pan &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
-    Click — fire missile (hover to preview) &nbsp;·&nbsp; R — regenerate
+    Click — fire missile &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
   </div>
 
   <div id="vx-toast"></div>
