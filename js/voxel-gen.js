@@ -71,7 +71,7 @@ function blastUnlockCost(r) {
 
 let renderer, scene, camera, root;
 let blockMeshes, blockGeo, water, activeMaterials;
-let dragging = false, lastX = 0, lastY = 0;
+let dragging = false, panDragging = false, lastX = 0, lastY = 0;
 let clickStartX = null, clickStartY = null, clickStartT = 0;
 let theta = Math.PI / 4, phi = 0.95, dist = 46, zoomLevel = 1;
 let target = new THREE.Vector3(GRID / 2, 0, GRID / 2);
@@ -79,7 +79,8 @@ const keys = {};
 
 let monsterGroup, monsterUiGroup, glowTex, monsters = [];
 let treeGroup, treeList = [];
-let currentHeights = null, currentSeaLevel = -99, currentBiome = null, scorched = null;
+let currentHeights = null, originalHeights = null, currentSeaLevel = -99, currentBiome = null, scorched = null;
+let damageAccum = null; // hit-points chipped into whatever block currently tops each column
 let currentSeed = "terra", monsterIdCounter = 0;
 let lastTime = 0;
 let panHoldTime = 0;
@@ -90,7 +91,7 @@ let lastBlastX = 0, lastBlastZ = 0;
 
 let raycaster, missiles = [], fx = [];
 let missileGeo, missileMat;
-let aimLightOuter, aimLightInner, hoverClientX = null, hoverClientY = null;
+let highlightGeo, highlightOuterMat, highlightCoreMat, hoverClientX = null, hoverClientY = null;
 
 function heightAt(x, z) {
   const xi = Math.max(0, Math.min(GRID - 1, Math.round(x)));
@@ -598,14 +599,27 @@ function buildHeightmap(seed, biome) {
   return h;
 }
 
-function layerType(biome, y, height) {
-  if (y === height) {
-    if (height <= biome.seaLevel + 1) return "sand";
-    if (height >= biome.snowLine) return "snow";
-    return "grass";
+// Depth-based rock strata, like real geology: soft dirt gives way to
+// progressively tougher rock the deeper you dig. Depth is measured from the
+// PRISTINE original surface (originalHeights), not the current dug-down
+// height — so a block newly exposed at the bottom of a deep hole still shows
+// (and resists like) whatever it truly is, not the grass/dirt cap that's long
+// gone. Resistance is in hit-points; see applyDamage.
+function stratumForDepth(depth) {
+  if (depth <= 1) return { type: "sub", resistance: 1 };
+  if (depth <= 4) return { type: "rock", resistance: 3 };
+  if (depth <= 9) return { type: "deepstone", resistance: 6 };
+  return { type: "bedrock", resistance: 10 };
+}
+
+function stratumAt(biome, y, originalHeight) {
+  const depth = originalHeight - y;
+  if (depth <= 0) {
+    if (originalHeight <= biome.seaLevel + 1) return { type: "sand", resistance: 1 };
+    if (originalHeight >= biome.snowLine) return { type: "snow", resistance: 1 };
+    return { type: "grass", resistance: 1 };
   }
-  if (y >= height - 1) return "sub";
-  return "rock";
+  return stratumForDepth(depth);
 }
 
 function clearGroup(group) {
@@ -644,9 +658,10 @@ function rebuildBlockMeshes() {
     for (let x = 0; x < GRID; x++) {
       const idx = z * GRID + x;
       const height = heights[idx];
+      const originalHeight = originalHeights[idx];
       const bottom = globalBottom; // same for every column — see comment above
       for (let y = height; y >= bottom; y--) {
-        let type = layerType(biome, y, height);
+        let type = stratumAt(biome, y, originalHeight).type;
         if (y === height && scorched[idx]) type = "charred";
         const variant = Math.floor(cellHash(x + y * 97, z) * variantCounts[type]);
         const key = `${type}:${variant}`;
@@ -681,7 +696,9 @@ function generateWorld(seed, biomeKey) {
   const biome = BIOMES[biomeKey];
   currentBiome = biome;
   currentHeights = buildHeightmap(seed, biome);
+  originalHeights = currentHeights.slice(); // pristine reference for depth/strata lookups — never mutated
   scorched = new Uint8Array(GRID * GRID);
+  damageAccum = new Uint16Array(GRID * GRID);
   const rand = mulberry32(hashSeed(seed + ":trees"));
 
   if (activeMaterials) disposeBlockMaterials(activeMaterials.materials);
@@ -785,23 +802,52 @@ function processClickQueue() {
   clickQueue = remaining;
 }
 
-// Preview of where a missile would land: a warm glow hovering over the spot,
-// sized to the blast radius, with a brighter/tighter hotspot for the
-// double-damage core. Lights have no ground geometry to clip through or
-// z-fight with, so this stays correct over any terrain shape automatically —
-// a flat ground-decal mesh kept skewing/clipping under uneven terrain.
+// Preview of where a missile would land: a thin translucent cap laid directly
+// on top of every column that would actually take damage, so the true
+// destruction footprint is visible block-by-block — not just an approximate
+// glow. Brighter/redder over the double-damage core, dimmer orange outside
+// it. Pooled meshes, reused/repositioned each hover update instead of
+// recreated, since the affected-area size changes with the blast radius.
+let highlightPool = [];
+
+function ensureHighlightMesh(i) {
+  while (highlightPool.length <= i) {
+    const m = new THREE.Mesh(highlightGeo, highlightOuterMat);
+    m.visible = false;
+    m.renderOrder = 5;
+    root.add(m);
+    highlightPool.push(m);
+  }
+  return highlightPool[i];
+}
+
+function hideAllHighlights() {
+  for (const m of highlightPool) m.visible = false;
+}
+
 function updateAimIndicator() {
-  if (hoverClientX === null || !blockMeshes) { aimLightOuter.intensity = aimLightInner.intensity = 0; return; }
+  if (hoverClientX === null || !blockMeshes) { hideAllHighlights(); return; }
   const point = raycastGround(hoverClientX, hoverClientY);
-  if (!point) { aimLightOuter.intensity = aimLightInner.intensity = 0; return; }
-  const coreR = Math.floor(maxUnlockedBlast / 2);
-  const y = point.y + 1.4;
-  aimLightOuter.position.set(point.x, y, point.z);
-  aimLightOuter.distance = maxUnlockedBlast * 2.6 + 4;
-  aimLightOuter.intensity = 60; // PointLight uses photometric (candela) units — needs to be large to read
-  aimLightInner.position.set(point.x, y - 0.6, point.z);
-  aimLightInner.distance = Math.max(2, coreR * 2.4 + 2);
-  aimLightInner.intensity = coreR > 0 ? 110 : 0;
+  if (!point) { hideAllHighlights(); return; }
+
+  const cx = Math.round(point.x), cz = Math.round(point.z);
+  const R = maxUnlockedBlast;
+  const coreR = Math.floor(R / 2);
+  const span = Math.ceil(R);
+  let count = 0;
+  for (let dz = -span; dz <= span; dz++) {
+    for (let dx = -span; dx <= span; dx++) {
+      const x = cx + dx, z = cz + dz;
+      if (x < 0 || z < 0 || x >= GRID || z >= GRID) continue;
+      const d = Math.hypot(dx, dz);
+      if (d > R) continue;
+      const mesh = ensureHighlightMesh(count++);
+      mesh.position.set(x, heightAt(x, z) + 0.53, z);
+      mesh.material = d <= coreR ? highlightCoreMat : highlightOuterMat;
+      mesh.visible = true;
+    }
+  }
+  for (let i = count; i < highlightPool.length; i++) highlightPool[i].visible = false;
 }
 
 function fireMissile(tx, ty, tz) {
@@ -864,6 +910,21 @@ function spawnTrailPuff(pos) {
 
 // Carves a crater into currentHeights and marks the char/scorch mask; does not
 // touch the render meshes (caller rebuilds them once, after other edits).
+// Deals damage to the block currently topping a column, carrying any
+// leftover through to the next-deepest block if it breaks (so one very
+// strong hit can punch through several soft layers, or a string of weaker
+// hits gradually wears down one tough one — damage persists between shots).
+function applyDamage(idx, dmg) {
+  damageAccum[idx] += dmg;
+  while (true) {
+    const depth = originalHeights[idx] - currentHeights[idx];
+    const resistance = depth <= 0 ? 1 : stratumForDepth(depth).resistance;
+    if (damageAccum[idx] < resistance) break;
+    damageAccum[idx] -= resistance;
+    currentHeights[idx] -= 1; // no floor — always more (tougher) rock below
+  }
+}
+
 function craterEdit(bx, bz) {
   const R = maxUnlockedBlast, R2 = R + 1.6;
   const coreR = Math.floor(R / 2); // inner half of the radius — double damage
@@ -878,10 +939,8 @@ function craterEdit(bx, bz) {
       const idx = z * GRID + x;
       if (d <= R) {
         const base = Math.max(1, Math.round((R - d) * 0.85 + 1));
-        const carve = d <= coreR ? base * 2 : base;
-        // No floor — digging the same spot keeps exposing new rock below
-        // rather than ever bottoming out into empty space.
-        currentHeights[idx] -= carve;
+        const dmg = d <= coreR ? base * 2 : base;
+        applyDamage(idx, dmg);
         scorched[idx] = 1;
       } else if (Math.random() < 0.55) {
         scorched[idx] = 1;
@@ -1151,14 +1210,16 @@ function init() {
   missileGeo.rotateX(-Math.PI / 2); // tip points toward -Z so lookAt() aims it correctly
   missileMat = new THREE.MeshLambertMaterial({ color: 0x445055 });
 
-  // Blast-radius preview that follows the mouse: two warm point lights (a
-  // wide dim one for the full radius, a tight bright one for the
-  // double-damage core) instead of a ground-decal mesh — lights can't clip
-  // through or z-fight with terrain, so this is immune to the skewing/
-  // under-terrain glitches a flat plane had over uneven ground.
-  aimLightOuter = new THREE.PointLight(0xff9a3c, 0, 10, 2);
-  aimLightInner = new THREE.PointLight(0xff3b2e, 0, 6, 2);
-  root.add(aimLightOuter, aimLightInner);
+  // Blast-radius preview: a thin translucent cap on every column that would
+  // actually take damage (see updateAimIndicator) — pool geometry/materials
+  // shared across every highlighted block.
+  highlightGeo = new THREE.BoxGeometry(0.96, 0.05, 0.96);
+  highlightOuterMat = new THREE.MeshBasicMaterial({
+    color: 0xff9a3c, transparent: true, opacity: 0.4, depthTest: false, depthWrite: false,
+  });
+  highlightCoreMat = new THREE.MeshBasicMaterial({
+    color: 0xff2e1c, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
+  });
 
   camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 300);
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1180,6 +1241,7 @@ function init() {
   canvas.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     dragging = true;
+    panDragging = e.metaKey || e.altKey; // Cmd/Option+drag pans instead of orbiting
     lastX = e.clientX; lastY = e.clientY;
     clickStartX = e.clientX; clickStartY = e.clientY; clickStartT = performance.now();
   });
@@ -1193,8 +1255,19 @@ function init() {
   });
   window.addEventListener("mousemove", (e) => {
     if (dragging) {
-      theta -= (e.clientX - lastX) * 0.006;
-      phi = Math.min(1.45, Math.max(0.25, phi - (e.clientY - lastY) * 0.006));
+      const dxPix = e.clientX - lastX, dyPix = e.clientY - lastY;
+      if (panDragging) {
+        const scale = 0.045 / zoomLevel;
+        const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
+        const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
+        target.addScaledVector(right, -dxPix * scale);
+        target.addScaledVector(fwd, dyPix * scale);
+        target.x = Math.max(2, Math.min(GRID - 2, target.x));
+        target.z = Math.max(2, Math.min(GRID - 2, target.z));
+      } else {
+        theta -= dxPix * 0.006;
+        phi = Math.min(1.45, Math.max(0.25, phi - dyPix * 0.006));
+      }
       lastX = e.clientX; lastY = e.clientY;
     }
     hoverClientX = e.clientX; hoverClientY = e.clientY;
@@ -1202,7 +1275,7 @@ function init() {
   });
   canvas.addEventListener("mouseleave", () => {
     hoverClientX = null; hoverClientY = null;
-    aimLightOuter.intensity = aimLightInner.intensity = 0;
+    hideAllHighlights();
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();

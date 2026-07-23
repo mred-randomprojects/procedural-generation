@@ -172,6 +172,29 @@ function charredTexture(rand) {
   });
 }
 
+// Deep strata are geology, not biome — same look everywhere regardless of
+// what's growing on the surface above, matching how real rock layers work.
+function deepstoneTexture(rand) {
+  return makeCanvasTexture((ctx) => {
+    paintSpeckled(ctx, 0x454b58, rand, { speckleChance: 0.3, darkAmt: 20, lightAmt: 14, jitter: 8 });
+    paintCracks(ctx, rand, 3, "rgba(0,0,0,0.3)");
+    paintCracks(ctx, rand, 2, "rgba(160,175,200,0.15)");
+  });
+}
+
+function bedrockTexture(rand) {
+  return makeCanvasTexture((ctx) => {
+    paintSpeckled(ctx, 0x15171d, rand, { speckleChance: 0.25, darkAmt: 14, lightAmt: 22, jitter: 6 });
+    paintCracks(ctx, rand, 4, "rgba(0,0,0,0.45)");
+    // sparse bright mineral flecks
+    for (let i = 0; i < 6; i++) {
+      const x = Math.floor(rand() * TILE), y = Math.floor(rand() * TILE);
+      ctx.fillStyle = `rgba(170,205,255,${0.3 + rand() * 0.4})`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  });
+}
+
 const ZOMBIE_SKIN_TONES = [0x4f8a4a, 0x7a8c4a, 0x6a8f6f, 0x8a7a4a];
 
 // Builds one articulated-zombie material set (skin/face/clothes), seeded per instance
@@ -195,7 +218,7 @@ export function disposeZombieMaterials(mats) {
   }
 }
 
-const VARIANT_COUNTS = { grass: 3, sub: 2, rock: 3, sand: 2, snow: 2, charred: 2 };
+const VARIANT_COUNTS = { grass: 3, sub: 2, rock: 3, sand: 2, snow: 2, charred: 2, deepstone: 2, bedrock: 2 };
 
 // Builds a fresh set of textured materials for the given biome, seeded so the
 // same world seed always reproduces the same grain pattern.
@@ -231,6 +254,18 @@ export function buildBlockMaterials(biome, seed) {
   for (let v = 0; v < VARIANT_COUNTS.charred; v++) {
     const tex = charredTexture(seedFor("charred", v));
     materials.charred.push(new THREE.MeshLambertMaterial({ map: tex }));
+  }
+
+  materials.deepstone = [];
+  for (let v = 0; v < VARIANT_COUNTS.deepstone; v++) {
+    const tex = deepstoneTexture(seedFor("deepstone", v));
+    materials.deepstone.push(new THREE.MeshLambertMaterial({ map: tex }));
+  }
+
+  materials.bedrock = [];
+  for (let v = 0; v < VARIANT_COUNTS.bedrock; v++) {
+    const tex = bedrockTexture(seedFor("bedrock", v));
+    materials.bedrock.push(new THREE.MeshLambertMaterial({ map: tex }));
   }
 
   // grass gets a 6-face material array: [+x,-x,+y,-y,+z,-z] = [side,side,top,bottom,side,side]
