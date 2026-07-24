@@ -169,6 +169,23 @@ export function applyCombo(state, kills, now) {
   return { count, expiresAt: now + COMBO_WINDOW };
 }
 
+/* ---------- canonical ranked balance for the Tweaks sliders ---------- */
+// resetTweaksToDefaults snaps every slider to these at the start of every
+// scored (ranked/daily) run. spawnsPerKill 1 keeps player kills
+// population-neutral — the waves supply the escalation. Higher values turn
+// blasting into a self-feeding zombie snowball: a fun sandbox toy, not
+// ranked balance.
+export const CANONICAL_TWEAKS = {
+  spawnsPerKill: 1,
+  spawnsPerEat: 1,
+  spawnDelay: 0,
+  speedPerLevel: 0.3,
+  simSpeed: 1,
+  hpPerLevel: 1,
+  dmgPerLevel: 1,
+  atkPerLevel: 0.25,
+};
+
 /* ---------- terrain strata ---------- */
 // Depth-based rock strata measured from the pristine surface; resistance is
 // in hit-points (see applyDamage in voxel-gen.js).

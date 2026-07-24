@@ -78,10 +78,11 @@ const DEPTH_SPARE = 5;
 // file) without explicit user direction; if a limit starts to feel necessary
 // for performance, raise it with the user rather than silently capping.
 // Population flows are all user-tweakable sliders (⚙️ Tweaks panel):
-// spawnsPerKill fresh zombies per player blast kill (default 2), and
-// spawnsPerEat per zombie eaten by another zombie via resolveZombieKill()
-// (default 1 = eats are population-neutral; 0 = the strong thin the herd).
-// User-chosen slider values are settings, not artificial limits.
+// spawnsPerKill fresh zombies per player blast kill (default 1 =
+// population-neutral, the waves drive escalation), and spawnsPerEat per
+// zombie eaten by another zombie via resolveZombieKill() (default 1 = eats
+// are population-neutral; 0 = the strong thin the herd). User-chosen
+// slider values are settings, not artificial limits.
 const MONSTER_COUNT = 9;
 const EAT_DIST = 0.85; // how close two zombies must be to fight (see updateZombieCombat)
 const STARTING_MAX_BLAST = core.STARTING_MAX_BLAST;
@@ -828,6 +829,10 @@ function checkContracts() {
 }
 
 function renderContracts() {
+  // The phone layout collapses the panel behind a 📜 pill — keep its
+  // done/total count live so progress stays visible without the chrome.
+  const pill = document.getElementById("vx-contracts-btn");
+  if (pill) pill.textContent = `📜 ${contracts.filter((c) => c.done).length}/${contracts.length || 3}`;
   const el = document.getElementById("vx-contracts-list");
   if (!el) return;
   el.innerHTML = contracts.map((c) => {
@@ -1173,33 +1178,35 @@ function killZombieByPlayer(m, source = "turret") {
 
 const stackScale = core.stackScale;
 /* ---------- live-tweakable sim knobs (⚙️ Tweaks panel in the HUD) ---------- */
-let spawnsPerKill = 2; // fresh zombies spawned per player blast kill
-let spawnsPerEat = 1; // fresh zombies spawned per zombie eaten by another zombie (0 = the strong thin the herd)
-let speedPerLevel = 0.3; // extra speed a zombie gains per level past 1
-let simSpeed = 1; // time multiplier for the zombie sim (movement + combat), not the player's missiles
-let hpPerLevel = 1; // extra max HP per level past 1 — crank it to make elites tanky against blasts too
-let dmgPerLevel = 1; // extra DPS per level past 1 dealt in zombie-vs-zombie fights
-let atkPerLevel = 0.25; // attack-rate growth per level past 1 (0 = every level shoots at the same cadence)
+// Canonical (ranked) values live in core.CANONICAL_TWEAKS — tested — and
+// every slider snaps back to them on scored runs via resetTweaksToDefaults.
+let spawnsPerKill = core.CANONICAL_TWEAKS.spawnsPerKill; // fresh zombies spawned per player blast kill (1 = population-neutral)
+let spawnsPerEat = core.CANONICAL_TWEAKS.spawnsPerEat; // fresh zombies spawned per zombie eaten by another zombie (0 = the strong thin the herd)
+let speedPerLevel = core.CANONICAL_TWEAKS.speedPerLevel; // extra speed a zombie gains per level past 1
+let simSpeed = core.CANONICAL_TWEAKS.simSpeed; // time multiplier for the zombie sim (movement + combat), not the player's missiles
+let hpPerLevel = core.CANONICAL_TWEAKS.hpPerLevel; // extra max HP per level past 1 — crank it to make elites tanky against blasts too
+let dmgPerLevel = core.CANONICAL_TWEAKS.dmgPerLevel; // extra DPS per level past 1 dealt in zombie-vs-zombie fights
+let atkPerLevel = core.CANONICAL_TWEAKS.atkPerLevel; // attack-rate growth per level past 1 (0 = every level shoots at the same cadence)
 
 // The ⚙️ Tweaks sliders, described once so the input handlers (init) and
 // resetTweaksToDefaults() share a single source of truth for each slider's
 // default value, label formatting, and live apply side-effects.
 const TWEAK_SLIDERS = [
-  { id: "vx-spawn-per-kill", def: 2, fmt: (v) => String(v), apply: (v) => { spawnsPerKill = v; } },
-  { id: "vx-spawn-per-eat", def: 1, fmt: (v) => String(v), apply: (v) => { spawnsPerEat = v; } },
-  { id: "vx-spawn-delay", def: 0, fmt: (v) => String(v), apply: (v) => { spawnDelay = v; } },
-  { id: "vx-speed-per-level", def: 0.3, fmt: (v) => v.toFixed(2), apply: (v) => {
+  { id: "vx-spawn-per-kill", def: core.CANONICAL_TWEAKS.spawnsPerKill, fmt: (v) => String(v), apply: (v) => { spawnsPerKill = v; } },
+  { id: "vx-spawn-per-eat", def: core.CANONICAL_TWEAKS.spawnsPerEat, fmt: (v) => String(v), apply: (v) => { spawnsPerEat = v; } },
+  { id: "vx-spawn-delay", def: core.CANONICAL_TWEAKS.spawnDelay, fmt: (v) => String(v), apply: (v) => { spawnDelay = v; } },
+  { id: "vx-speed-per-level", def: core.CANONICAL_TWEAKS.speedPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => {
       speedPerLevel = v;
       // Re-derive every living zombie's speed so the new slope applies now.
       for (const m of monsters) m.speed = stackSpeed(m.stackLevel) + Math.random() * 0.2;
     } },
-  { id: "vx-sim-speed", def: 1, fmt: (v) => v.toFixed(1), apply: (v) => { simSpeed = v; } },
-  { id: "vx-hp-per-level", def: 1, fmt: (v) => v.toFixed(2), apply: (v) => {
+  { id: "vx-sim-speed", def: core.CANONICAL_TWEAKS.simSpeed, fmt: (v) => v.toFixed(1), apply: (v) => { simSpeed = v; } },
+  { id: "vx-hp-per-level", def: core.CANONICAL_TWEAKS.hpPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => {
       hpPerLevel = v;
       for (const m of monsters) m.hp = maxHpFor(m.stackLevel); // heal all to the new full
     } },
-  { id: "vx-dmg-per-level", def: 1, fmt: (v) => v.toFixed(2), apply: (v) => { dmgPerLevel = v; } },
-  { id: "vx-atk-per-level", def: 0.25, fmt: (v) => v.toFixed(2), apply: (v) => { atkPerLevel = v; } },
+  { id: "vx-dmg-per-level", def: core.CANONICAL_TWEAKS.dmgPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => { dmgPerLevel = v; } },
+  { id: "vx-atk-per-level", def: core.CANONICAL_TWEAKS.atkPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => { atkPerLevel = v; } },
 ];
 
 // Snap every tweak — sim var AND slider/label DOM — back to its canonical
@@ -1660,8 +1667,8 @@ function killMonstersNear(bx, bz, r) {
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
     // No cap, intentionally — see the "no artificial limits" note near
-    // MONSTER_COUNT. Every kill spawns `spawnsPerKill` more (default 2, user
-    // tweakable down to 0 from the ⚙️ Tweaks panel), unconditionally, forever.
+    // MONSTER_COUNT. Every kill spawns `spawnsPerKill` more (default 1, user
+    // tweakable from the ⚙️ Tweaks panel), unconditionally, forever.
     let toSpawn = kills * spawnsPerKill;
     while (toSpawn-- > 0) queueZombieSpawn();
   }
@@ -2200,6 +2207,8 @@ function updateAimIndicator() {
 }
 
 function fireMissile(tx, ty, tz) {
+  // First shot fired: the phone layout uses this to fade the how-to hint.
+  document.body.classList.add("played");
   const ox = (Math.random() - 0.5) * 12;
   const oz = (Math.random() - 0.5) * 12;
   const start = new THREE.Vector3(tx + ox, ty + 26 + Math.random() * 6, tz + oz);
@@ -2639,7 +2648,10 @@ function init() {
     // Same practically-unbounded zoom range as the wheel handler below.
     zoomLevel = Math.min(40, Math.max(0.05, pinchStartZoom * (d / pinchStartDist)));
     onResize();
-    panCamera(midX - lastMidX, midY - lastMidY); // two-finger drag pans too
+    // Two-finger drag pans too — negated so the WORLD follows the fingers
+    // (panCamera's sign convention is "move the camera", which suits
+    // WASD/mouse but is backwards for direct-manipulation touch).
+    panCamera(-(midX - lastMidX), -(midY - lastMidY));
     lastMidX = midX; lastMidY = midY;
   }
 
@@ -2706,12 +2718,15 @@ function init() {
       if (panDragging) {
         panCamera(dxPix, dyPix);
       } else {
-        theta -= dxPix * 0.006;
+        // Touch is direct manipulation — the scene follows the finger — so
+        // its orbit runs opposite to the mouse's move-the-camera scheme.
+        const orbitDir = e.pointerType === "mouse" ? 1 : -1;
+        theta -= dxPix * 0.006 * orbitDir;
         // Near-full vertical orbit: from almost level with the horizon (you
         // can look at the terrain edge-on, even slightly from below) to
         // almost straight down. Only an epsilon off the exact poles, where
         // the orbit math degenerates.
-        phi = Math.min(1.55, Math.max(0.02, phi - dyPix * 0.006));
+        phi = Math.min(1.55, Math.max(0.02, phi - dyPix * 0.006 * orbitDir));
       }
       lastX = e.clientX; lastY = e.clientY;
     }
@@ -2734,8 +2749,13 @@ function init() {
         // Mouse keeps the quick-click time limit; touch deliberately has
         // none — press-and-hold to aim, release to fire.
         if (movedDist < dragSlop(e.pointerType) && (e.pointerType !== "mouse" || elapsed < 400)) {
-          if (phoneLayout.matches && document.body.classList.contains("hud-open")) {
-            document.body.classList.remove("hud-open"); // tap on the world closes the drawer
+          const overlayOpen = phoneLayout.matches &&
+            (document.body.classList.contains("hud-open") || document.body.classList.contains("contracts-open"));
+          if (overlayOpen) {
+            // Tap on the world closes whatever phone overlay is up — it
+            // must never double as a missile through the panel.
+            document.body.classList.remove("hud-open");
+            document.body.classList.remove("contracts-open");
           } else {
             queueClick(e.clientX, e.clientY);
           }
@@ -2843,8 +2863,15 @@ function init() {
 
   // Mobile chrome: settings-drawer toggle, pause button, pause-overlay
   // actions (phones have no P/R keys). All work with a mouse too.
+  // The two phone overlays (settings drawer, contracts list) are mutually
+  // exclusive — opening one closes the other so panels never stack.
   document.getElementById("vx-menu-btn")?.addEventListener("click", () => {
     document.body.classList.toggle("hud-open");
+    document.body.classList.remove("contracts-open");
+  });
+  document.getElementById("vx-contracts-btn")?.addEventListener("click", () => {
+    document.body.classList.toggle("contracts-open");
+    document.body.classList.remove("hud-open");
   });
   document.getElementById("vx-pause-btn")?.addEventListener("click", togglePause);
   document.getElementById("vx-resume-btn")?.addEventListener("click", togglePause);

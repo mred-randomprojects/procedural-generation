@@ -874,16 +874,40 @@ input, select { -webkit-user-select: text; user-select: text; }
     bottom: auto;
   }
 
-  /* Contracts compact to a slim strip under the FAB column. */
-  #hud-contracts {
-    top: calc(170px + env(safe-area-inset-top));
+  /* Contracts collapse behind the 📜 pill (an always-open panel was too
+     much chrome on a phone screen); the pill live-updates its done/total
+     count, so progress stays glanceable without the clutter. */
+  #hud-contracts { display: none; }
+  body.contracts-open #hud-contracts {
+    display: block;
+    top: calc(214px + env(safe-area-inset-top));
     left: calc(10px + env(safe-area-inset-left));
     bottom: auto;
-    width: min(48vw, 180px);
+    width: min(64vw, 230px);
     padding: 6px 9px 7px;
     font-size: 10.5px;
+    background: rgba(13, 17, 23, 0.92);
+    z-index: 45;
   }
   #hud-contracts h2 { font-size: 10px; margin-bottom: 3px; }
+  #vx-contracts-btn {
+    top: calc(164px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    width: auto;
+    padding: 0 12px;
+    border-radius: 21px;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  body.contracts-open #vx-contracts-btn {
+    background: rgba(60, 110, 175, 0.55);
+    border-color: #6eb4ff;
+  }
+
+  /* The how-to hint earns its keep exactly once: it fades away for good
+     after the first missile is fired (body.played, set in fireMissile). */
+  #hud-hint { transition: opacity 0.8s ease 1s; }
+  body.played #hud-hint { opacity: 0; pointer-events: none; }
 
   #hud-shop {
     left: calc(10px + env(safe-area-inset-left));
@@ -927,9 +951,9 @@ input, select { -webkit-user-select: text; user-select: text; }
 
 /* Landscape phones: not enough height for the drawer + board stack — the
    board collapses and the drawer takes the full height above the shop.
-   Contracts would collide with the shop grid too, so they yield. */
+   (Contracts are already behind the 📜 pill on all phone layouts; when
+   toggled open they overlay the shop deliberately.) */
 @media (max-height: 520px) {
   body.hud-open #hud-top { bottom: calc(120px + env(safe-area-inset-bottom)); }
   body.hud-open #hud-board { display: none; }
-  #hud-contracts { display: none; }
 }

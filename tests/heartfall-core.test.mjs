@@ -176,6 +176,20 @@ test("applyCombo chains inside the window and resets outside it", () => {
   assert.equal(s.count, 1);
 });
 
+/* ---------- canonical ranked balance ---------- */
+
+test("ranked tweak defaults: kills are population-neutral, sim runs 1:1", () => {
+  const t = core.CANONICAL_TWEAKS;
+  assert.equal(t.spawnsPerKill, 1); // NOT 2 — blasting must not snowball the horde
+  assert.equal(t.spawnsPerEat, 1);
+  assert.equal(t.spawnDelay, 0);
+  assert.equal(t.simSpeed, 1);
+  assert.equal(t.speedPerLevel, 0.3);
+  assert.equal(t.hpPerLevel, 1);
+  assert.equal(t.dmgPerLevel, 1);
+  assert.equal(t.atkPerLevel, 0.25);
+});
+
 /* ---------- strata ---------- */
 
 test("stratumForDepth gets strictly tougher with depth", () => {
