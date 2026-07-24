@@ -2,116 +2,246 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0d1117" />
-  <title>Procedural Worlds — Noise &amp; Wave Function Collapse</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Heartfall — Voxel Heart Defense</title>
+  <link rel="stylesheet" href="voxel.css" />
   <script src="js/noise.js" defer></script>
-  <script src="js/world.js" defer></script>
-  <script src="js/render.js" defer></script>
-  <script src="js/wfc.js" defer></script>
-  <script src="js/main.js" defer></script>
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+  <script src="js/voxel-gen.js" type="module" defer></script>
 </head>
 <body>
-  <aside id="sidebar">
-    <header>
-      <h1>Procedural Worlds</h1>
-      <p class="subtitle">Layered-noise terrain (the Minecraft way) and wave function collapse, live in your browser. Every slider is a real input to the generator.</p>
-    </header>
+  <div id="voxel-root"></div>
 
-    <nav class="tabs">
-      <button class="tab active" data-tab="world">🌍 Noise World</button>
-      <button class="tab" data-tab="wfc">🧩 WFC</button>
-    </nav>
-    <a class="skylink" href="3d.html">🎈 Skylands — isometric 3D + missiles →</a>
-    <a class="skylink" href="voxel.html">🧱 New: Voxel Worlds — Minecraft-style biomes →</a>
+  <div id="hud-heart" class="hud-panel">
+    <div class="hud-heart-row">
+      <span class="hud-heart-title">💎 The Heart</span>
+      <span id="vx-wave-val">Wave 0</span>
+    </div>
+    <div class="hud-heart-bar"><div id="vx-heart-fill"></div></div>
+  </div>
 
-    <section id="panel-world">
-      <div class="row seed-row">
-        <input id="seed" type="text" value="gaia" spellcheck="false" aria-label="World seed" />
-        <button id="dice" title="Random seed">🎲</button>
+  <div id="vx-gameover">
+    <div class="go-panel">
+      <h2>💔 The Heart has fallen</h2>
+      <div id="vx-go-stats"></div>
+      <div id="vx-legacy-shop"></div>
+      <div class="go-actions">
+        <button id="vx-go-restart">💎 Defend again</button>
+        <button id="vx-go-menu">🏠 Menu</button>
       </div>
+    </div>
+  </div>
 
-      <div class="row view-row">
-        <button class="view active" data-view="biome">Biomes</button>
-        <button class="view" data-view="elev">Height</button>
-        <button class="view" data-view="moist">Moisture</button>
-        <button class="view" data-view="temp">Heat</button>
+  <div id="vx-title">
+    <div class="title-panel">
+      <h1 class="title-logo">💎 HEARTFALL</h1>
+      <p class="title-tag">Hold the Heart against the evolving horde.</p>
+      <p class="title-how">
+        <span class="only-fine">Click</span><span class="only-coarse">Tap</span> to fire missiles · Zombies eat each other and <b>evolve</b> ·
+        Spend ⚡ on repairs &amp; turrets · Survive the waves
+      </p>
+      <div class="title-mode">
+        <button class="mode-btn active" data-mode="ranked">🏆 Ranked</button>
+        <button class="mode-btn" data-mode="daily">📅 Daily</button>
+        <button class="mode-btn" data-mode="sandbox">🧪 Sandbox</button>
       </div>
+      <p class="title-mode-note" id="vx-mode-note">Best score, achievements &amp; shards are saved.</p>
+      <div class="title-diff">
+        <button class="diff-btn" data-diff="easy">🌱 Easy</button>
+        <button class="diff-btn active" data-diff="normal">⚔️ Normal</button>
+        <button class="diff-btn" data-diff="hard">💀 Hard</button>
+      </div>
+      <div class="title-settings">
+        <label>🔊 Volume <input type="range" id="vx-volume" min="0" max="1" step="0.05" value="1" /></label>
+        <label>📳 Screen shake <input type="checkbox" id="vx-shake-toggle" checked /></label>
+      </div>
+      <button id="vx-title-play">▶ Defend the Heart</button>
+      <div class="title-meta" id="vx-title-meta"></div>
+      <div class="title-extra">
+        <button id="vx-stats-btn">📊 Stats</button>
+        <button id="vx-ach-btn">🏆 Achievements</button>
+      </div>
+      <div id="vx-stats-panel" class="title-subpanel"></div>
+      <div id="vx-ach-panel" class="title-subpanel"></div>
+    </div>
+  </div>
 
-      <label>Terrain scale <span class="val"></span>
-        <input id="p-scale" type="range" min="1" max="6" step="0.1" value="2.2" /></label>
-      <label>Detail (octaves) <span class="val"></span>
-        <input id="p-octaves" type="range" min="1" max="8" step="1" value="5" /></label>
-      <label>Roughness <span class="val"></span>
-        <input id="p-rough" type="range" min="0.35" max="0.68" step="0.01" value="0.5" /></label>
-      <label>Island shape <span class="val"></span>
-        <input id="p-island" type="range" min="0" max="1" step="0.05" value="0.3" /></label>
-      <label>Sea level <span class="val"></span>
-        <input id="p-sea" type="range" min="0.2" max="0.7" step="0.01" value="0.46" /></label>
-      <label>Mountain line <span class="val"></span>
-        <input id="p-mtn" type="range" min="0.55" max="0.95" step="0.01" value="0.75" /></label>
-      <label>Moisture <span class="val"></span>
-        <input id="p-moist" type="range" min="-0.4" max="0.4" step="0.02" value="0" /></label>
-      <label>Temperature <span class="val"></span>
-        <input id="p-temp" type="range" min="-0.4" max="0.4" step="0.02" value="0" /></label>
-      <label>Rivers <span class="val"></span>
-        <input id="p-rivers" type="range" min="0" max="40" step="1" value="14" /></label>
-      <label>Towns <span class="val"></span>
-        <input id="p-towns" type="range" min="0" max="14" step="1" value="6" /></label>
+  <div id="vx-vignette"></div>
 
-      <details>
-        <summary>How this world is made</summary>
-        <ul>
-          <li><b>Three noise fields.</b> Elevation, moisture and temperature are independent layers of smooth random (simplex) noise — the same trick Minecraft uses. Flip to the Height / Moisture / Heat views to see the raw layers.</li>
-          <li><b>Thresholds.</b> The sea &amp; mountain sliders are simple cut-offs on elevation. Everything in between is classified by (temperature, moisture) into a biome — a Whittaker diagram lookup.</li>
-          <li><b>Rivers</b> start on high ground and flow downhill until they reach the sea (or pond up). They moisten nearby land, so valleys turn green.</li>
-          <li><b>Towns</b> are placed by scoring cells (flat, near water, mild climate) and keeping the best ones that are far apart. <b>Roads</b> are A* paths that avoid steep slopes and pay a toll to bridge rivers.</li>
-        </ul>
-      </details>
+  <div id="vx-paused">
+    <div class="paused-panel">
+      <div class="paused-title">⏸ Paused</div>
+      <div class="paused-actions">
+        <button id="vx-resume-btn">▶ Resume</button>
+        <button id="vx-pause-newrun">↻ New run</button>
+        <button id="vx-pause-menu">🏠 Menu</button>
+      </div>
+      <div class="paused-hint only-fine">P — resume &nbsp;·&nbsp; R — new run</div>
+    </div>
+  </div>
 
-      <h3>Legend</h3>
-      <div id="legend"></div>
-    </section>
+  <div id="hud-shop" class="hud-panel">
+    <button id="vx-shop-repair" title="Restore 30 Heart HP">🔧 Repair <span class="shop-cost" id="vx-repair-cost">50⚡</span></button>
+    <button id="vx-shop-turret" title="Build an auto-firing turret near the Heart">🗼 Turret <span class="shop-cost" id="vx-turret-cost">120⚡</span></button>
+    <button id="vx-shop-mine" title="Bury a proximity mine on the approach to the Heart">💣 Mine <span class="shop-cost" id="vx-mine-cost">40⚡</span></button>
+    <button id="vx-shop-slow" title="Slow every zombie near the Heart for 15s">🧊 Slow <span class="shop-cost" id="vx-slow-cost">80⚡</span></button>
+  </div>
 
-    <section id="panel-wfc" hidden>
-      <label>Speed (collapses / frame) <span class="val"></span>
-        <input id="wfc-speed" type="range" min="1" max="80" step="1" value="14" /></label>
+  <div id="hud-score" class="hud-panel">
+    <div id="vx-sandbox-note">🧪 Sandbox — not saved</div>
+    <div id="vx-daily-note">📅 Daily Challenge</div>
+    <div class="hud-score-row">
+      <span class="hud-label">🧟 Zombies killed</span>
+      <span id="vx-score-val">0</span>
+    </div>
+    <div class="hud-score-row">
+      <span class="hud-label">⚡ Energy</span>
+      <span id="vx-energy-val">0</span>
+    </div>
+    <div id="vx-combo" class="hud-combo">
+      <div class="hud-score-row">
+        <span class="hud-label">🔥 <span id="vx-combo-val">×0</span></span>
+        <span id="vx-combo-mult" class="hud-combo-mult">payout ×1.00</span>
+      </div>
+      <div class="hud-combo-bar"><div id="vx-combo-fill"></div></div>
+    </div>
+    <div class="hud-xp-block">
+      <div class="hud-score-row">
+        <span class="hud-label">⭐ XP</span>
+        <span id="vx-xp-val">0</span>
+      </div>
+      <div class="hud-xp-bar"><div id="vx-xp-fill" class="hud-xp-fill"></div></div>
+      <div id="vx-xp-next" class="hud-xp-next">0 / 40 XP → radius 4</div>
+    </div>
+  </div>
 
-      <h3>Tile weights</h3>
-      <label>Water <span class="val"></span>
-        <input id="w-water" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
-      <label>Sand <span class="val"></span>
-        <input id="w-sand" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
-      <label>Grass <span class="val"></span>
-        <input id="w-grass" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
-      <label>Forest <span class="val"></span>
-        <input id="w-forest" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
-      <label>Mountains <span class="val"></span>
-        <input id="w-mountain" class="wfc-weight" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
+  <div id="hud-top" class="hud-panel">
+    <h1>Heartfall</h1>
+    <div class="hud-row">
+      <input id="vx-seed" value="terra" spellcheck="false" aria-label="World seed" />
+      <button id="vx-new" title="New random world">↻</button>
+    </div>
+    <div class="hud-row">
+      <select id="vx-biome" aria-label="Biome preset">
+        <option value="plains">Plains</option>
+        <option value="desert">Desert</option>
+        <option value="snowy">Snowy Tundra</option>
+        <option value="islands">Islands</option>
+        <option value="mountains">Mountains</option>
+        <option value="swamp">Swamp</option>
+      </select>
+    </div>
+    <div class="hud-row">
+      <span class="hud-label">Blast radius</span>
+      <span id="vx-radius-val">3</span>
+    </div>
+    <div class="hud-row">
+      <button id="vx-locate-elite" title="Circle the current strongest zombie(s)">🎯 Locate strongest</button>
+    </div>
+    <details id="vx-tweaks">
+      <summary>⚙️ Tweaks</summary>
+      <div class="hud-slider-row" title="Fresh zombies spawned for each zombie YOU kill with a blast — fractions roll stochastically (1.1 = +10% chance of one extra)">
+        <span class="hud-label">Spawns per blast kill</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-spawn-per-kill" min="0" max="10" step="0.1" value="1.1" />
+          <span class="hud-slider-val" id="vx-spawn-per-kill-val">1.1</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="Fresh zombies spawned each time a zombie gets eaten by another zombie — set to 0 to let the strong thin the herd">
+        <span class="hud-label">Spawns per eaten</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-spawn-per-eat" min="0" max="5" step="1" value="1" />
+          <span class="hud-slider-val" id="vx-spawn-per-eat-val">1</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="Delay before each queued respawn actually appears">
+        <span class="hud-label">Respawn delay (s)</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-spawn-delay" min="0" max="30" step="1" value="0" />
+          <span class="hud-slider-val" id="vx-spawn-delay-val">0</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="Extra movement speed a zombie gains per level beyond 1">
+        <span class="hud-label">Speed per level</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-speed-per-level" min="0" max="1.5" step="0.05" value="0.3" />
+          <span class="hud-slider-val" id="vx-speed-per-level-val">0.30</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="Extra max HP per level beyond 1 — high values make elites shrug off blasts too (all zombies heal to full when changed)">
+        <span class="hud-label">HP per level</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-hp-per-level" min="0" max="5" step="0.25" value="1" />
+          <span class="hud-slider-val" id="vx-hp-per-level-val">1.00</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="Extra fight damage-per-second per level beyond 1">
+        <span class="hud-label">Damage per level</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-dmg-per-level" min="0" max="5" step="0.25" value="1" />
+          <span class="hud-slider-val" id="vx-dmg-per-level-val">1.00</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="How much faster each level shoots (visual cadence; damage sliders control the actual DPS)">
+        <span class="hud-label">Attack speed per level</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-atk-per-level" min="0" max="1" step="0.05" value="0.25" />
+          <span class="hud-slider-val" id="vx-atk-per-level-val">0.25</span>
+        </div>
+      </div>
+      <div class="hud-slider-row" title="Time multiplier for the zombie world (movement + fights); your missiles are unaffected">
+        <span class="hud-label">Sim speed ×</span>
+        <div class="hud-slider-inner">
+          <input type="range" id="vx-sim-speed" min="0.25" max="8" step="0.25" value="1" />
+          <span class="hud-slider-val" id="vx-sim-speed-val">1.0</span>
+        </div>
+      </div>
+      <div class="hud-row">
+        <button id="vx-spawn-one" title="Spawn one fresh level-1 zombie">➕ Spawn zombie</button>
+      </div>
+      <div class="hud-row">
+        <button id="vx-new-terrain" title="New terrain, same zombies">⛰ New terrain (keep zombies)</button>
+      </div>
+      <div class="hud-row">
+        <button id="vx-kill-all" title="Remove every zombie (no respawns triggered)">💀 Clear zombies</button>
+      </div>
+    </details>
+    <a class="hud-link" href="experiments/">← 2D worlds</a>
+    <a class="hud-link" href="experiments/3d.html">isometric skylands →</a>
+  </div>
 
-      <div class="row"><button id="wfc-restart" class="primary">↻ Restart collapse</button></div>
+  <div id="hud-board" class="hud-panel">
+    <h2>🧱 Zombie stacks</h2>
+    <div id="vx-board-list"></div>
+  </div>
 
-      <h3>Paint</h3>
-      <p class="hint">Pick a tile, then click / drag on the map to force it — constraints ripple outward. If a tile is impossible somewhere, the area melts back into superposition and re-collapses ("heals") around your choice.</p>
-      <div id="palette"></div>
+  <div id="hud-contracts" class="hud-panel">
+    <h2>📜 Contracts</h2>
+    <div id="vx-contracts-list"></div>
+  </div>
 
-      <details>
-        <summary>How wave function collapse works</summary>
-        <ul>
-          <li>Every cell starts as a <b>superposition</b> of all 8 tiles (dim = uncertain).</li>
-          <li>Each step, the algorithm picks the cell with the <b>lowest entropy</b> (fewest / most lopsided options left) and <b>collapses</b> it to a single tile, chosen randomly using the weights above.</li>
-          <li>Constraints then <b>propagate</b>: a tile may only touch itself or its immediate neighbours in the chain deep&nbsp;→&nbsp;water&nbsp;→&nbsp;sand&nbsp;→&nbsp;grass&nbsp;→&nbsp;forest&nbsp;→&nbsp;hills&nbsp;→&nbsp;mountain&nbsp;→&nbsp;snow. Impossible options get deleted, which can cascade far across the map.</li>
-          <li>Paint a tile to force a choice and watch the ripple. Painting something the constraints forbid (snow in a lake, say) melts the neighbourhood back into uncertainty, and it heals around your choice.</li>
-        </ul>
-      </details>
-    </section>
-  </aside>
+  <div id="hud-hint" class="hud-panel">
+    <span class="only-fine">
+      Drag — rotate &nbsp;·&nbsp; ⌘/⌥ + drag — pan &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
+      Click — fire missile &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
+    </span>
+    <span class="only-coarse">
+      Tap — fire (hold to aim) · Drag — rotate · 2 fingers — pan · Pinch — zoom
+    </span>
+  </div>
 
-  <main>
-    <canvas id="world-canvas" width="960" height="600"></canvas>
-    <canvas id="wfc-canvas" width="960" height="600" hidden></canvas>
-    <div id="status"></div>
-  </main>
+  <button id="vx-menu-btn" class="hud-fab" title="World &amp; tweaks" aria-label="Toggle world settings">⚙️</button>
+  <button id="vx-pause-btn" class="hud-fab" title="Pause" aria-label="Pause">⏸</button>
+  <button id="vx-contracts-btn" class="hud-fab" title="Contracts" aria-label="Toggle contracts">📜 0/3</button>
+
+  <div id="vx-toast"></div>
+
+  <div id="hud-version">v.<span id="vx-version-val">dev</span></div>
 </body>
 </html>

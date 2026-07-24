@@ -1,20 +1,22 @@
 # Procedural Worlds
 
-A self-contained browser demo of procedural generation techniques — noise-based
-terrain, wave function collapse, isometric 3D, and **Heartfall**, a full voxel
-tower-defense game. No build step beyond loading Three.js from a CDN.
+**💎 Heartfall** — a full voxel tower-defense game — plus the procedural
+generation experiments it grew out of (noise terrain, wave function collapse,
+isometric 3D). No build step beyond loading Three.js from a CDN.
 
 **Run it:** open `index.html` directly, or serve the folder
 (`python3 -m http.server 8123` → http://localhost:8123).
 
 **Test it:** `npm test` (Node ≥ 18; runs the game-logic suite in `tests/`).
 
-- `index.html` — noise terrain + wave function collapse (2D)
-- `3d.html` — Skylands: isometric voxel archipelago with missiles
-- `voxel.html` — **💎 Heartfall**: defend the Heart against an evolving
+- `index.html` — **💎 Heartfall**: defend the Heart against an evolving
   voxel zombie horde (see below)
+- `experiments/index.html` — noise terrain + wave function collapse (2D)
+- `experiments/3d.html` — Skylands: isometric voxel archipelago with missiles
+- `voxel.html`, `3d.html` — redirect stubs so pre-restructure links keep
+  working
 
-## Heartfall (voxel.html)
+## Heartfall (index.html)
 
 A complete siege-defense game on procedurally generated voxel terrain:
 

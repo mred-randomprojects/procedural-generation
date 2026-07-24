@@ -1,6 +1,6 @@
 # Heartfall — Steam packaging
 
-Electron shell that wraps the web game (`../voxel.html`) into desktop builds
+Electron shell that wraps the web game (`../index.html`) into desktop builds
 suitable for Steam depots.
 
 ## Build steps
@@ -43,7 +43,8 @@ suitable for Steam depots.
 
 ## What the desktop build contains
 
-`build.sh` stages: `voxel.html`, `voxel.css`, `js/noise.js`,
+`build.sh` stages: `index.html` (the game, staged as `app/voxel.html`),
+`voxel.css`, `js/noise.js`,
 `js/heartfall-core.js`, `js/voxel-gen.js`, `js/voxel-textures.js`,
 `js/voxel-audio.js`, a vendored `js/three.module.js`, and a stamped
 `version.json`. No network access is needed at runtime.

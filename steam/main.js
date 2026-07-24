@@ -1,6 +1,6 @@
 // Electron shell for Heartfall — wraps the web build for Steam distribution.
 //
-// The game itself lives in ../voxel.html + ../js/*; `npm run stage` (see
+// The game itself lives in ../index.html + ../js/*; `npm run stage` (see
 // README) copies those into ./app before packaging so the shipped app is
 // fully self-contained and offline-capable (the three.js import map must be
 // vendored — see README step 2).

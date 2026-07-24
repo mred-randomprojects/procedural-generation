@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1117" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Skylands — Isometric Voxel Archipelago</title>
+  <link rel="stylesheet" href="../sky.css" />
+  <script src="../js/noise.js" defer></script>
+  <script src="../js/sky-gen.js" defer></script>
+  <script src="../js/sky-render.js" defer></script>
+  <script src="../js/sky-game.js" defer></script>
+</head>
+<body>
+  <canvas id="sky-canvas"></canvas>
+
+  <div id="hud-top" class="hud-panel">
+    <h1>Skylands</h1>
+    <div class="hud-row">
+      <input id="sky-seed" value="zephyr" spellcheck="false" aria-label="World seed" />
+      <button id="sky-new" title="New random world">↻</button>
+      <a class="hud-link" href="index.html">← 2D worlds</a>
+      <a class="hud-link" href="../">💎 Heartfall →</a>
+    </div>
+    <div id="sky-stats"></div>
+  </div>
+
+  <div id="hud-hint" class="hud-panel">
+    <span class="only-fine">WASD / arrows — fly &nbsp;·&nbsp; click — missile &nbsp;·&nbsp; R — new world &nbsp;·&nbsp; M — mute</span>
+    <span class="only-coarse">Joystick — fly &nbsp;·&nbsp; tap — missile</span>
+  </div>
+
+  <button id="sky-mute" title="Mute (M)" aria-label="Mute">🔊</button>
+  <div id="sky-joystick"><div id="sky-joy-knob"></div></div>
+</body>
+</html>

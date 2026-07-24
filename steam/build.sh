@@ -10,7 +10,10 @@ THREE_VERSION="0.160.0"
 
 rm -rf app
 mkdir -p app/js
-cp ../voxel.html ../voxel.css app/
+# The game is the site's front page (../index.html); root voxel.html is just
+# a redirect stub for old links. Stage it under the name main.js expects.
+cp ../index.html app/voxel.html
+cp ../voxel.css app/
 cp ../js/noise.js ../js/heartfall-core.js ../js/voxel-gen.js \
    ../js/voxel-textures.js ../js/voxel-audio.js app/js/
 
@@ -25,7 +28,7 @@ sed "s#https://unpkg.com/three@${THREE_VERSION}/build/three.module.js#./js/three
 mv app/voxel.html.tmp app/voxel.html
 
 if grep -q "unpkg.com" app/voxel.html; then
-  echo "ERROR: import map still points at unpkg — check THREE_VERSION vs voxel.html" >&2
+  echo "ERROR: import map still points at unpkg — check THREE_VERSION vs index.html" >&2
   exit 1
 fi
 
