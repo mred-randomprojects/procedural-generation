@@ -598,7 +598,10 @@ function spawnZombieAt(x, z, level = 1, isBoss = false) {
 
 // Spawns one fresh zombie at a random valid spot — used to replace a killed
 // one. `level` > 1 (with isBoss) spawns a pre-evolved boss instead.
+// Non-boss spawns are lifted to the condensation ratchet's minimum level
+// (bosses already outlevel it and keep their story-scaled level).
 function spawnRandomZombie(atEdge = false, level = 1, isBoss = false) {
+  if (!isBoss) level = Math.max(level, minSpawnLevel);
   const biome = currentBiome;
   let x = GRID / 2, z = GRID / 2, h;
   for (let tries = 0; tries < 30; tries++) {
@@ -623,7 +626,7 @@ function spawnRandomZombie(atEdge = false, level = 1, isBoss = false) {
   updateZombieBoard();
 }
 
-/* ---------- condensation: 500 of a level fuse into 250 of the next ---------- */
+/* ---------- condensation: 200 of a level fuse into 100 of the next ---------- */
 // The user-directed pressure valve on entity count (see the note by
 // MONSTER_COUNT): the moment any stack level holds CONDENSE_THRESHOLD living
 // non-boss zombies, the whole cohort fuses — all are removed, and half as
@@ -631,6 +634,11 @@ function spawnRandomZombie(atEdge = false, level = 1, isBoss = false) {
 // combo, no respawn rolls: it's a merge, not a kill, so it never feeds the
 // player economy or the spawn loops. Bosses never fuse (they're story
 // beats with bounties, not biomass).
+// A fusion also RATCHETS the run: once level X condenses, fresh spawns
+// enter at level X+1 minimum — the world as a whole outgrows its larva
+// stage. Resets to 1 with each new run.
+let minSpawnLevel = 1;
+
 function checkCondensation() {
   if (monsters.length < core.CONDENSE_THRESHOLD) return; // cheap early-out
   const byLevel = new Map();
@@ -662,7 +670,9 @@ function checkCondensation() {
     }
     // Newborns pulse so the fusion reads as an event, not a glitch.
     for (let i = monsters.length - survivors; i < monsters.length; i++) monsters[i].eatPulse = 0.3;
-    showBanner("fuse", "⚗️ CRITICAL MASS", `${group.length} × Lv ${level} CONDENSE`, `${survivors} level-${level + 1} zombies rise from the fusion`);
+    minSpawnLevel = core.condenseFloor(minSpawnLevel, level);
+    showBanner("fuse", "⚗️ CRITICAL MASS", `${group.length} × Lv ${level} CONDENSE`,
+      `${survivors} level-${level + 1} zombies rise — fresh spawns now start at Lv ${minSpawnLevel}`);
     unlockAchievement("critical-mass");
     playBossSpawn();
     shake = Math.min(4.5, shake + 1.2);
@@ -712,7 +722,7 @@ function updateWaves(dt) {
       const bossLevel = core.bossLevelForWave(waveNumber);
       spawnRandomZombie(true, bossLevel, true);
       playBossSpawn();
-      showToast(`☠️ BOSS WAVE ${waveNumber} — a level ${bossLevel} colossus approaches! Bounty: ${core.bossBounty(bossLevel)}⚡`);
+      showToast(`☠️ BOSS WAVE ${waveNumber} — a level ${bossLevel} colossus approaches! Bounty: ${core.fmtNum(core.bossBounty(bossLevel))}⚡`);
     } else {
       playWaveStart();
       // Surviving a wave transition on a sliver of HP is a story moment —
@@ -766,7 +776,7 @@ function endRun() {
     : `${Math.max(0, Math.round(lowestHeartFrac * 100))}% HP`;
   const line1 =
     `Survived <b>${mins}m ${secs}s</b> across <b>${waveNumber}</b> waves<br>` +
-    `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b><br>` +
+    `Zombies destroyed: <b>${core.fmtNum(killCount)}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b><br>` +
     `Best combo: <b>×${runMaxCombo}</b> · Bosses slain: <b>${bossesKilledThisRun}</b> · ` +
     `Mutations endured: <b>${mutationCount}</b><br>` +
     `Contracts: <b>${contractsDone}/3</b> · Closest call: <b>${closest}</b>`;
@@ -786,7 +796,7 @@ function endRun() {
       daily = core.recordDailyScore(daily, todayStr(), score);
       saveDaily();
       scoreLine =
-        `Score: <b>${score}</b> · <span class="go-best">Today's best: ${daily.todayBest}</span>` +
+        `Score: <b>${core.fmtNum(score)}</b> · <span class="go-best">Today's best: ${core.fmtNum(daily.todayBest)}</span>` +
         ` · 🔥 <b>${daily.streak}</b>-day streak`;
     } else {
       let best = 0;
@@ -794,7 +804,7 @@ function endRun() {
         best = Number(localStorage.getItem("vx-best-score") || 0);
         if (score > best) { best = score; localStorage.setItem("vx-best-score", String(score)); }
       } catch { /* storage may be unavailable; the run still ends cleanly */ }
-      scoreLine = `Score: <b>${score}</b> · <span class="go-best">Best: ${best}</span>`;
+      scoreLine = `Score: <b>${core.fmtNum(score)}</b> · <span class="go-best">Best: ${core.fmtNum(best)}</span>`;
     }
 
     // Bank Legacy shards — every defeat still buys future power. Shard
@@ -806,7 +816,7 @@ function endRun() {
     if (stats) stats.innerHTML =
       `${line1}<br>` +
       `${scoreLine}<br>` +
-      `🔮 Shards earned: <b>+${shardsEarned}</b>`;
+      `🔮 Shards earned: <b>+${core.fmtNum(shardsEarned)}</b>`;
     renderLegacyShop();
   }
 
@@ -830,7 +840,7 @@ function renderLegacyShop() {
       <button class="legacy-buy" data-perk="${i}" ${afford ? "" : "disabled"}>${cost} 🔮</button>
     </div>`;
   }).join("");
-  el.innerHTML = `<div class="legacy-title">🔮 Legacy — ${legacy.shards} shards</div>${rows}`;
+  el.innerHTML = `<div class="legacy-title">🔮 Legacy — ${core.fmtNum(legacy.shards)} shards</div>${rows}`;
   for (const btn of el.querySelectorAll(".legacy-buy")) {
     btn.addEventListener("click", () => {
       const perk = LEGACY_PERKS[Number(btn.dataset.perk)];
@@ -942,6 +952,9 @@ function resetRun() {
   // world can never inherit a previous run's XP or upgrade points.
   killCount = 0;
   xp = 0;
+  minSpawnLevel = 1; // condensation ratchet starts over
+  turretDamageUps = 0;
+  turretRangeUps = 0;
   maxUnlockedBlast = STARTING_MAX_BLAST + legacy.blastRank; // Demolitionist legacy perk
   blastDamage = core.STARTING_BLAST_DAMAGE + legacy.damageRank; // Heavy Ordnance legacy perk
   upgradesEarned = 0;
@@ -990,7 +1003,7 @@ function updateShopHud() {
   const setBtn = (btnId, costId, cost, extraDisabled = false) => {
     const btn = document.getElementById(btnId);
     const costEl = document.getElementById(costId);
-    if (costEl) costEl.textContent = `${cost}⚡`;
+    if (costEl) costEl.textContent = `${core.fmtNum(cost)}⚡`;
     if (btn) btn.disabled = gameState !== "playing" || energy < cost || extraDisabled;
   };
   setBtn("vx-shop-repair", "vx-repair-cost", repairCost, !heart || heart.hp >= heartMaxHp());
@@ -1116,11 +1129,14 @@ function updateMines() {
 
 /* ---------- turrets: automated defense ---------- */
 
-const TURRET_RANGE = 8;
 const TURRET_COOLDOWN = 0.8;
+// In-run ⭐ picks (reset each run): 🎯 shares the Legacy +0.5/rank damage
+// scale, 📡 stretches the targeting radius by 2 blocks per pick.
+let turretDamageUps = 0, turretRangeUps = 0;
 // Flat, ignores zombie armor — turrets are tech, like blasts. Overcharged
-// Turrets legacy ranks raise it.
-function turretDmg() { return core.turretDamage(legacy.turretRank); }
+// Turrets legacy ranks and in-run 🎯 picks both raise it.
+function turretDmg() { return core.turretDamage(legacy.turretRank + turretDamageUps); }
+function turretRange() { return core.turretRange(turretRangeUps); }
 
 // Each new turret takes the next slot on a ring around the Heart (golden-
 // angle spacing so any count spreads evenly without overlapping).
@@ -1177,7 +1193,7 @@ function updateTurrets(dt) {
   for (const t of turrets) {
     t.cooldown -= dt;
     // Track + shoot the nearest zombie in range.
-    let best = null, bestD = TURRET_RANGE;
+    let best = null, bestD = turretRange();
     for (const m of monsters) {
       const d = Math.hypot(m.x - t.x, m.z - t.z);
       if (d < bestD) { best = m; bestD = d; }
@@ -1236,7 +1252,7 @@ function onBossKilledByPlayer(m) {
   bossesKilledThisRun++;
   unlockAchievement("boss-slayer");
   playBossDown();
-  showToast(`☠️ Boss destroyed! Bounty +${bounty}⚡`);
+  showToast(`☠️ Boss destroyed! Bounty +${core.fmtNum(bounty)}⚡`);
 }
 
 // A single player-credited kill (a turret bolt or mine finished a zombie
@@ -1565,10 +1581,10 @@ function resolveZombieKill(killer, loser) {
 
 function updateScoreHud() {
   const killEl = document.getElementById("vx-score-val");
-  if (killEl) killEl.textContent = String(killCount);
+  if (killEl) killEl.textContent = core.fmtNum(killCount);
 
   const energyEl = document.getElementById("vx-energy-val");
-  if (energyEl) energyEl.textContent = String(energy);
+  if (energyEl) energyEl.textContent = core.fmtNum(energy);
   updateShopHud();
 
   const radiusEl = document.getElementById("vx-radius-val");
@@ -1577,7 +1593,7 @@ function updateScoreHud() {
   if (damageEl) damageEl.textContent = String(blastDamage);
 
   const xpEl = document.getElementById("vx-xp-val");
-  if (xpEl) xpEl.textContent = String(xp);
+  if (xpEl) xpEl.textContent = core.fmtNum(xp);
 
   const fillEl = document.getElementById("vx-xp-fill");
   const nextEl = document.getElementById("vx-xp-next");
@@ -1585,7 +1601,7 @@ function updateScoreHud() {
   const prevCost = upgradesEarned > 0 ? upgradeUnlockCost(upgradesEarned) : 0;
   const pct = Math.max(0, Math.min(1, (xp - prevCost) / (nextCost - prevCost)));
   if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
-  if (nextEl) nextEl.textContent = `${xp} / ${nextCost} XP → upgrade choice`;
+  if (nextEl) nextEl.textContent = `${core.fmtNum(xp)} / ${core.fmtNum(nextCost)} XP → upgrade choice`;
 }
 
 // "Board" panel: how many zombies currently exist at each stack level.
@@ -1595,11 +1611,16 @@ function updateZombieBoard() {
   const counts = new Map();
   for (const m of monsters) counts.set(m.stackLevel, (counts.get(m.stackLevel) || 0) + 1);
   const levels = [...counts.keys()].sort((a, b) => a - b);
+  // Once condensation has ratcheted the spawn floor, say so — it explains
+  // why "fresh" zombies suddenly arrive pre-evolved.
+  const floorRow = minSpawnLevel > 1
+    ? `<div class="hud-board-row hud-board-floor"><span>⬆ Spawn floor</span><span>Lv ${minSpawnLevel}</span></div>`
+    : "";
   if (levels.length === 0) {
-    el.innerHTML = `<div class="hud-board-empty">No zombies left</div>`;
+    el.innerHTML = `${floorRow}<div class="hud-board-empty">No zombies left</div>`;
     return;
   }
-  el.innerHTML = levels
+  el.innerHTML = floorRow + levels
     .map((lv) => `<div class="hud-board-row"><span>Lvl ${lv}</span><span>${counts.get(lv)}</span></div>`)
     .join("");
 }
@@ -1635,6 +1656,10 @@ function updateUpgradeChooser() {
   if (radiusVal) radiusVal.textContent = `${maxUnlockedBlast} → ${maxUnlockedBlast + 1}`;
   const damageVal = document.getElementById("vx-up-damage-val");
   if (damageVal) damageVal.textContent = `${blastDamage} → ${blastDamage + 1}`;
+  const tdVal = document.getElementById("vx-up-turretdmg-val");
+  if (tdVal) tdVal.textContent = `${turretDmg()} → ${turretDmg() + 0.5}`;
+  const trVal = document.getElementById("vx-up-turretrange-val");
+  if (trVal) trVal.textContent = `${turretRange()} → ${turretRange() + 2}`;
 }
 
 function chooseUpgrade(kind) {
@@ -1643,6 +1668,12 @@ function chooseUpgrade(kind) {
   if (kind === "radius") {
     maxUnlockedBlast++;
     showToast(`💥 Blast radius ${maxUnlockedBlast}!`);
+  } else if (kind === "turretdmg") {
+    turretDamageUps++;
+    showToast(`🎯 Turret damage ${turretDmg()} — every bolt hits harder!`);
+  } else if (kind === "turretrange") {
+    turretRangeUps++;
+    showToast(`📡 Turret range ${turretRange()} — bolts reach further out!`);
   } else {
     blastDamage++;
     showToast(`⚔️ Blast damage ${blastDamage} — deeper craters, harder hits!`);
@@ -2867,12 +2898,17 @@ function init() {
   const phoneLayout = window.matchMedia("(max-width: 760px), (max-height: 520px)");
 
   function panCamera(dxPix, dyPix) {
+    // Grab-the-world pan: the terrain follows the pointer on BOTH axes
+    // (drag right → world slides right), matching every hand-tool and
+    // touch map. The camera therefore moves opposite the drag. Keyboard
+    // pan (WASD) keeps its own move-the-camera signs — keys steer, drags
+    // grab.
     // Free pan — no bounds. Digging has no floor, so the camera can't have
     // one either: clamping the target made deep pits and the map's
     // underside literally unviewable.
     const scale = 0.045 / zoomLevel;
-    const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
-    const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
+    const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta)); // toward viewer ≈ screen-down
+    const right = new THREE.Vector3(Math.sin(theta), 0, -Math.cos(theta)); // screen-right
     target.addScaledVector(right, -dxPix * scale);
     target.addScaledVector(fwd, -dyPix * scale);
   }
@@ -2894,10 +2930,9 @@ function init() {
     // Same practically-unbounded zoom range as the wheel handler below.
     zoomLevel = Math.min(40, Math.max(0.05, pinchStartZoom * (d / pinchStartDist)));
     onResize();
-    // Two-finger drag pans too — negated so the WORLD follows the fingers
-    // (panCamera's sign convention is "move the camera", which suits
-    // WASD/mouse but is backwards for direct-manipulation touch).
-    panCamera(-(midX - lastMidX), -(midY - lastMidY));
+    // Two-finger drag pans too — panCamera is grab-the-world, so raw
+    // deltas already make the terrain follow the fingers.
+    panCamera(midX - lastMidX, midY - lastMidY);
     lastMidX = midX; lastMidY = midY;
   }
 
@@ -3060,6 +3095,8 @@ function init() {
     // chooseUpgrade itself no-ops when nothing is pending.
     if (e.key === "1") chooseUpgrade("radius");
     if (e.key === "2") chooseUpgrade("damage");
+    if (e.key === "3") chooseUpgrade("turretdmg");
+    if (e.key === "4") chooseUpgrade("turretrange");
   });
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -3108,6 +3145,8 @@ function init() {
   document.getElementById("vx-go-restart").addEventListener("click", restartRun);
   document.getElementById("vx-up-radius")?.addEventListener("click", () => chooseUpgrade("radius"));
   document.getElementById("vx-up-damage")?.addEventListener("click", () => chooseUpgrade("damage"));
+  document.getElementById("vx-up-turretdmg")?.addEventListener("click", () => chooseUpgrade("turretdmg"));
+  document.getElementById("vx-up-turretrange")?.addEventListener("click", () => chooseUpgrade("turretrange"));
   document.getElementById("vx-shop-repair").addEventListener("click", buyRepair);
   document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
   document.getElementById("vx-shop-mine").addEventListener("click", buyMine);
@@ -3322,8 +3361,8 @@ function showTitle() {
     const unlocked = Object.keys(unlockedAchievements).length;
     const streakBit = daily.streak > 0 ? ` · 📅 <b>${daily.streak}</b>-day streak` : "";
     meta.innerHTML =
-      `Best score: <b>${best}</b> · Achievements: <b>${unlocked}/${Object.keys(ACHIEVEMENTS).length}</b>` +
-      ` · Legacy shards: <b>${legacy.shards}</b>${streakBit}`;
+      `Best score: <b>${core.fmtNum(best)}</b> · Achievements: <b>${unlocked}/${Object.keys(ACHIEVEMENTS).length}</b>` +
+      ` · Legacy shards: <b>${core.fmtNum(legacy.shards)}</b>${streakBit}`;
   }
   renderStatsPanel();
   renderAchievementsPanel();
@@ -3342,11 +3381,11 @@ function renderStatsPanel() {
   const s = lifeStats;
   const hours = Math.floor(s.timePlayed / 3600), minutes = Math.floor((s.timePlayed % 3600) / 60);
   const rows = [
-    ["Runs", s.runs],
-    ["Zombies destroyed", s.kills],
-    ["Bosses slain", s.bosses],
+    ["Runs", core.fmtNum(s.runs)],
+    ["Zombies destroyed", core.fmtNum(s.kills)],
+    ["Bosses slain", core.fmtNum(s.bosses)],
     ["Best wave", s.bestWave || "—"],
-    ["Waves survived (total)", s.totalWaves],
+    ["Waves survived (total)", core.fmtNum(s.totalWaves)],
     ["Best combo", s.bestCombo >= 2 ? `×${s.bestCombo}` : "—"],
     ["Contracts completed", s.contractsDone],
     ["Dailies played", s.dailies],

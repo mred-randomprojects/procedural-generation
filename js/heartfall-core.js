@@ -184,14 +184,40 @@ export function mutationAtIndex(seedStr, index) {
 // at the NEXT level up, in their places. Quantity becomes quality: entity
 // counts stay renderable while the horde's strength keeps climbing.
 
-export const CONDENSE_THRESHOLD = 500;
+export const CONDENSE_THRESHOLD = 200;
 
 // How many level-(N+1) zombies a fusing cohort of `count` produces.
 export function condenseSurvivors(count) {
   return Math.floor(count / 2);
 }
 
+// After a level-X cohort fuses, X+1 is the run's new minimum spawn level:
+// fresh (non-boss) spawns enter at least this strong. The ratchet only
+// climbs — a lower-level fusion never lowers an already-raised floor.
+export function condenseFloor(currentFloor, fusedLevel) {
+  return Math.max(currentFloor, fusedLevel + 1);
+}
+
 /* ---------- economy & scoring ---------- */
+
+// Compact HUD readout for run-away numbers: 2321075 → "~2.3M". Values
+// under 10k stay exact (still readable at a glance); the "~" appears only
+// when rounding actually hid digits, so 2.5M / 45k render without it.
+export function fmtNum(n) {
+  if (!Number.isFinite(n)) return String(n);
+  const neg = n < 0 ? "-" : "";
+  const a = Math.abs(n);
+  if (a < 10000) return neg + String(a);
+  const tiers = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "k"]];
+  let i = tiers.findIndex(([div]) => a >= div);
+  const v = a / tiers[i][0];
+  let shown = v >= 100 ? Math.round(v) : Math.round(v * 10) / 10;
+  if (shown >= 1000 && i > 0) { i--; shown /= 1000; } // 999950 → "1M", never "1000k"
+  // Tolerance beats === here: 45.3 * 1000 is 45299.999…, and that float
+  // dust must not stamp a "~" on a value that reads exactly.
+  const exact = Math.abs(shown * tiers[i][0] - a) < 0.5;
+  return `${exact ? "" : "~"}${neg}${shown}${tiers[i][1]}`;
+}
 
 export function killPayout(level) { return level * 10; }
 export function runScore(survivalSeconds, killCount) {
@@ -216,7 +242,11 @@ export const LEGACY_PERKS = [
   { key: "shardRank", icon: "🔮", name: "Shard Magnet", desc: "+15% shards earned" },
 ];
 
-export function turretDamage(turretRank) { return 1 + 0.5 * turretRank; }
+// `ranks` pools Legacy Overcharged Turrets ranks with in-run ⭐ upgrade
+// picks — both are worth the same +0.5, so they share one scale.
+export function turretDamage(ranks) { return 1 + 0.5 * ranks; }
+// Targeting radius in blocks; each in-run 📡 pick extends it.
+export function turretRange(rangeUps = 0) { return 8 + 2 * rangeUps; }
 export function freeMines(mineRank) { return 2 * mineRank; }
 export function legacyTotalRanks(legacy) {
   return LEGACY_PERKS.reduce((sum, p) => sum + (legacy[p.key] || 0), 0);
@@ -412,7 +442,7 @@ export const ACHIEVEMENTS = {
   "kills-1000": "🏆 Legion Slayer — 1,000 lifetime kills",
   "legacy-5": "🏆 Dynasty — earn 5 Legacy ranks",
   "adapted": "🏆 Adapted — endure 5 horde mutations in one run",
-  "critical-mass": "🏆 Critical Mass — witness 500 zombies condense into a stronger horde",
+  "critical-mass": "🏆 Critical Mass — witness 200 zombies condense into a stronger horde",
 };
 
 /* ---------- persisted-state sanitizers ---------- */

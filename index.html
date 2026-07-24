@@ -38,6 +38,8 @@
     <div class="upgrade-btns">
       <button id="vx-up-radius" title="Widen every blast's footprint">💥 Radius <span class="upgrade-next" id="vx-up-radius-val">3 → 4</span><kbd class="only-fine">1</kbd></button>
       <button id="vx-up-damage" title="Blasts hit zombies harder and carve deeper craters">⚔️ Damage <span class="upgrade-next" id="vx-up-damage-val">1 → 2</span><kbd class="only-fine">2</kbd></button>
+      <button id="vx-up-turretdmg" title="Every turret bolt hits harder (also boosts future turrets)">🎯 Turret dmg <span class="upgrade-next" id="vx-up-turretdmg-val">1 → 1.5</span><kbd class="only-fine">3</kbd></button>
+      <button id="vx-up-turretrange" title="Turrets target zombies further from their perch">📡 Turret range <span class="upgrade-next" id="vx-up-turretrange-val">8 → 10</span><kbd class="only-fine">4</kbd></button>
     </div>
   </div>
 
@@ -222,7 +224,7 @@
         </div>
       </div>
       <div class="hud-row">
-        <button id="vx-spawn-one" title="Spawn one fresh level-1 zombie">➕ Spawn zombie</button>
+        <button id="vx-spawn-one" title="Spawn one fresh zombie at the run's current minimum level">➕ Spawn zombie</button>
       </div>
       <div class="hud-row">
         <button id="vx-new-terrain" title="New terrain, same zombies">⛰ New terrain (keep zombies)</button>
@@ -248,7 +250,7 @@
   <div id="hud-hint" class="hud-panel">
     <span class="only-fine">
       Drag — rotate &nbsp;·&nbsp; ⌘/⌥ + drag — pan &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
-      Click — fire missile &nbsp;·&nbsp; 1/2 — spend upgrade &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
+      Click — fire missile &nbsp;·&nbsp; 1-4 — spend upgrade &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
     </span>
     <span class="only-coarse">
       Tap — fire (hold to aim) · Drag — rotate · 2 fingers — pan · Pinch — zoom

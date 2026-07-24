@@ -115,9 +115,15 @@ test("mutation pool entries are well-formed and unique", () => {
 /* ---------- condensation ---------- */
 
 test("condensation halves a fusing cohort, rounding down", () => {
-  assert.equal(core.condenseSurvivors(500), 250);
-  assert.equal(core.condenseSurvivors(501), 250);
+  assert.equal(core.condenseSurvivors(200), 100);
+  assert.equal(core.condenseSurvivors(201), 100);
   assert.ok(core.CONDENSE_THRESHOLD >= 100); // a merge, not a cull
+});
+
+test("condensation ratchets the spawn floor up, never down", () => {
+  assert.equal(core.condenseFloor(1, 1), 2); // first lvl-1 fusion → spawns start at 2
+  assert.equal(core.condenseFloor(2, 4), 5); // higher fusion raises it further
+  assert.equal(core.condenseFloor(5, 2), 5); // a straggler fusion can't lower it
 });
 
 /* ---------- zombie curves ---------- */
@@ -202,9 +208,24 @@ test("shardsForScore pays at least 1 and Shard Magnet multiplies", () => {
   assert.equal(core.shardsForScore(1000, 2), 26); // ×1.3
 });
 
+test("fmtNum compacts unreadable numbers, keeps small ones exact", () => {
+  assert.equal(core.fmtNum(0), "0");
+  assert.equal(core.fmtNum(9999), "9999"); // below 10k stays exact
+  assert.equal(core.fmtNum(2321075), "~2.3M"); // the reported eyesore
+  assert.equal(core.fmtNum(45000), "45k"); // exact multiples skip the ~
+  assert.equal(core.fmtNum(45500), "45.5k");
+  assert.equal(core.fmtNum(123456), "~123k"); // ≥100 units: no decimals
+  assert.equal(core.fmtNum(999999), "~1M"); // promotes, never "1000k"
+  assert.equal(core.fmtNum(2500000000), "2.5B");
+  assert.equal(core.fmtNum(7e12), "7T");
+  assert.equal(core.fmtNum(-2321075), "~-2.3M");
+});
+
 test("legacy perk helpers", () => {
   assert.equal(core.turretDamage(0), 1);
   assert.equal(core.turretDamage(3), 2.5);
+  assert.equal(core.turretRange(0), 8); // base targeting radius
+  assert.equal(core.turretRange(3), 14); // +2 blocks per 📡 pick
   assert.equal(core.freeMines(0), 0);
   assert.equal(core.freeMines(2), 4);
   assert.equal(core.legacyTotalRanks({ heartRank: 2, blastRank: 1, shardRank: 2 }), 5);

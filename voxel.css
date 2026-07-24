@@ -804,7 +804,7 @@ body.daily #vx-new:disabled {
   margin-bottom: 7px;
   letter-spacing: 0.4px;
 }
-.upgrade-btns { display: flex; gap: 8px; justify-content: center; }
+.upgrade-btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .upgrade-btns button {
   border-radius: 9px;
   padding: 8px 14px;
@@ -823,6 +823,16 @@ body.daily #vx-new:disabled {
   background: #2d1014;
   color: #ff9a8a;
   border: 1px solid #b02e3a;
+}
+#vx-up-turretdmg {
+  background: #10202d;
+  color: #8ac4ff;
+  border: 1px solid #2e6ab0;
+}
+#vx-up-turretrange {
+  background: #102d1c;
+  color: #8affbe;
+  border: 1px solid #2eb06a;
 }
 .upgrade-next { color: #ffe9c0; font-weight: 800; margin-left: 5px; }
 .upgrade-btns kbd {
@@ -1075,7 +1085,8 @@ input, select { -webkit-user-select: text; user-select: text; }
     transform: none;
     padding: 7px 8px 8px;
   }
-  .upgrade-btns button { flex: 1; padding: 8px 6px; font-size: 12.5px; }
+  /* 2×2 grid — four choices in one row don't fit a phone width. */
+  .upgrade-btns button { flex: 1 1 40%; padding: 8px 6px; font-size: 12.5px; }
   .upgrade-title { font-size: 11.5px; margin-bottom: 5px; }
 
   .banner-title { font-size: 25px; }
