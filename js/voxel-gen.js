@@ -78,11 +78,12 @@ const DEPTH_SPARE = 5;
 // file) without explicit user direction; if a limit starts to feel necessary
 // for performance, raise it with the user rather than silently capping.
 // Population flows are all user-tweakable sliders (⚙️ Tweaks panel):
-// spawnsPerKill fresh zombies per player blast kill (default 1 =
-// population-neutral, the waves drive escalation), and spawnsPerEat per
-// zombie eaten by another zombie via resolveZombieKill() (default 1 = eats
-// are population-neutral; 0 = the strong thin the herd). User-chosen
-// slider values are settings, not artificial limits.
+// spawnsPerKill fresh zombies per player blast kill (default 1.1 = every
+// kill replaces itself +10% chance of a bonus runt — the waves drive real
+// escalation; see core.spawnsForKills for the fractional roll), and
+// spawnsPerEat per zombie eaten by another zombie via resolveZombieKill()
+// (default 1 = eats are population-neutral; 0 = the strong thin the herd).
+// User-chosen slider values are settings, not artificial limits.
 const MONSTER_COUNT = 9;
 const EAT_DIST = 0.85; // how close two zombies must be to fight (see updateZombieCombat)
 const STARTING_MAX_BLAST = core.STARTING_MAX_BLAST;
@@ -1171,7 +1172,7 @@ function killZombieByPlayer(m, source = "turret") {
   maybeCelebrateNewBest();
   updateScoreHud();
   checkBlastUnlocks();
-  let toSpawn = spawnsPerKill;
+  let toSpawn = core.spawnsForKills(1, spawnsPerKill);
   while (toSpawn-- > 0) queueZombieSpawn();
   updateZombieBoard();
 }
@@ -1180,7 +1181,7 @@ const stackScale = core.stackScale;
 /* ---------- live-tweakable sim knobs (⚙️ Tweaks panel in the HUD) ---------- */
 // Canonical (ranked) values live in core.CANONICAL_TWEAKS — tested — and
 // every slider snaps back to them on scored runs via resetTweaksToDefaults.
-let spawnsPerKill = core.CANONICAL_TWEAKS.spawnsPerKill; // fresh zombies spawned per player blast kill (1 = population-neutral)
+let spawnsPerKill = core.CANONICAL_TWEAKS.spawnsPerKill; // fresh zombies per player blast kill (1.1 = replace + 10% bonus roll)
 let spawnsPerEat = core.CANONICAL_TWEAKS.spawnsPerEat; // fresh zombies spawned per zombie eaten by another zombie (0 = the strong thin the herd)
 let speedPerLevel = core.CANONICAL_TWEAKS.speedPerLevel; // extra speed a zombie gains per level past 1
 let simSpeed = core.CANONICAL_TWEAKS.simSpeed; // time multiplier for the zombie sim (movement + combat), not the player's missiles
@@ -1192,7 +1193,7 @@ let atkPerLevel = core.CANONICAL_TWEAKS.atkPerLevel; // attack-rate growth per l
 // resetTweaksToDefaults() share a single source of truth for each slider's
 // default value, label formatting, and live apply side-effects.
 const TWEAK_SLIDERS = [
-  { id: "vx-spawn-per-kill", def: core.CANONICAL_TWEAKS.spawnsPerKill, fmt: (v) => String(v), apply: (v) => { spawnsPerKill = v; } },
+  { id: "vx-spawn-per-kill", def: core.CANONICAL_TWEAKS.spawnsPerKill, fmt: (v) => String(Math.round(v * 10) / 10), apply: (v) => { spawnsPerKill = v; } },
   { id: "vx-spawn-per-eat", def: core.CANONICAL_TWEAKS.spawnsPerEat, fmt: (v) => String(v), apply: (v) => { spawnsPerEat = v; } },
   { id: "vx-spawn-delay", def: core.CANONICAL_TWEAKS.spawnDelay, fmt: (v) => String(v), apply: (v) => { spawnDelay = v; } },
   { id: "vx-speed-per-level", def: core.CANONICAL_TWEAKS.speedPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => {
@@ -1441,8 +1442,9 @@ function resolveZombieKill(killer, loser) {
 
   // Replacement spawns — default 1-for-1 keeps eats population-neutral, but
   // it's a tweakable: 0 lets the strong actually thin the herd, higher
-  // values make eating feed the swarm.
-  for (let s = 0; s < spawnsPerEat; s++) queueZombieSpawn();
+  // values make eating feed the swarm. Fractional values roll stochastically.
+  let eatSpawns = core.spawnsForKills(1, spawnsPerEat);
+  while (eatSpawns-- > 0) queueZombieSpawn();
 
   // The killer may itself have died from a crossing projectile in the same
   // instant — a corpse doesn't eat, so the XP just goes unclaimed.
@@ -1667,9 +1669,10 @@ function killMonstersNear(bx, bz, r) {
     checkBlastUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
     // No cap, intentionally — see the "no artificial limits" note near
-    // MONSTER_COUNT. Every kill spawns `spawnsPerKill` more (default 1, user
-    // tweakable from the ⚙️ Tweaks panel), unconditionally, forever.
-    let toSpawn = kills * spawnsPerKill;
+    // MONSTER_COUNT. Every kill spawns `spawnsPerKill` more (default 1.1:
+    // each kill replaces itself, fractional part rolls stochastically —
+    // see core.spawnsForKills), unconditionally, forever.
+    let toSpawn = core.spawnsForKills(kills, spawnsPerKill);
     while (toSpawn-- > 0) queueZombieSpawn();
   }
 }

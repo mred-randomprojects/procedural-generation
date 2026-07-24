@@ -146,11 +146,11 @@
     </div>
     <details id="vx-tweaks">
       <summary>⚙️ Tweaks</summary>
-      <div class="hud-slider-row" title="Fresh zombies spawned for each zombie YOU kill with a blast">
+      <div class="hud-slider-row" title="Fresh zombies spawned for each zombie YOU kill with a blast — fractions roll stochastically (1.1 = +10% chance of one extra)">
         <span class="hud-label">Spawns per blast kill</span>
         <div class="hud-slider-inner">
-          <input type="range" id="vx-spawn-per-kill" min="0" max="10" step="1" value="1" />
-          <span class="hud-slider-val" id="vx-spawn-per-kill-val">1</span>
+          <input type="range" id="vx-spawn-per-kill" min="0" max="10" step="0.1" value="1.1" />
+          <span class="hud-slider-val" id="vx-spawn-per-kill-val">1.1</span>
         </div>
       </div>
       <div class="hud-slider-row" title="Fresh zombies spawned each time a zombie gets eaten by another zombie — set to 0 to let the strong thin the herd">

@@ -171,12 +171,12 @@ export function applyCombo(state, kills, now) {
 
 /* ---------- canonical ranked balance for the Tweaks sliders ---------- */
 // resetTweaksToDefaults snaps every slider to these at the start of every
-// scored (ranked/daily) run. spawnsPerKill 1 keeps player kills
-// population-neutral — the waves supply the escalation. Higher values turn
-// blasting into a self-feeding zombie snowball: a fun sandbox toy, not
-// ranked balance.
+// scored (ranked/daily) run. spawnsPerKill 1.1 means every kill replaces
+// itself plus a 10% chance of one bonus runt (see spawnsForKills) — a
+// whisper of growth so the map never thins out, without the self-feeding
+// snowball that 2.0 was (that's a sandbox toy, not ranked balance).
 export const CANONICAL_TWEAKS = {
-  spawnsPerKill: 1,
+  spawnsPerKill: 1.1,
   spawnsPerEat: 1,
   spawnDelay: 0,
   speedPerLevel: 0.3,
@@ -185,6 +185,19 @@ export const CANONICAL_TWEAKS = {
   dmgPerLevel: 1,
   atkPerLevel: 0.25,
 };
+
+// Fractional spawn rates, resolved stochastically: `kills` kills at `rate`
+// spawn floor(kills*rate) guaranteed, +1 more with probability equal to the
+// leftover fraction. Expected value is exactly kills*rate, and any 10 kills
+// at 1.1 yield exactly 11 (the fraction only ever rolls once per call).
+export function spawnsForKills(kills, rate, rand = Math.random) {
+  // Nano-epsilon rounding so float noise (10 × 1.1 = 11.000000000000002)
+  // never manufactures a phantom fraction to roll on.
+  const expected = Math.round(kills * rate * 1e9) / 1e9;
+  const guaranteed = Math.floor(expected);
+  const frac = expected - guaranteed;
+  return guaranteed + (frac > 0 && rand() < frac ? 1 : 0);
+}
 
 /* ---------- terrain strata ---------- */
 // Depth-based rock strata measured from the pristine surface; resistance is

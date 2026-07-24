@@ -178,9 +178,9 @@ test("applyCombo chains inside the window and resets outside it", () => {
 
 /* ---------- canonical ranked balance ---------- */
 
-test("ranked tweak defaults: kills are population-neutral, sim runs 1:1", () => {
+test("ranked tweak defaults: near-neutral kills, sim runs 1:1", () => {
   const t = core.CANONICAL_TWEAKS;
-  assert.equal(t.spawnsPerKill, 1); // NOT 2 — blasting must not snowball the horde
+  assert.equal(t.spawnsPerKill, 1.1); // NOT 2 — a 10% whisper of growth, never a snowball
   assert.equal(t.spawnsPerEat, 1);
   assert.equal(t.spawnDelay, 0);
   assert.equal(t.simSpeed, 1);
@@ -188,6 +188,26 @@ test("ranked tweak defaults: kills are population-neutral, sim runs 1:1", () => 
   assert.equal(t.hpPerLevel, 1);
   assert.equal(t.dmgPerLevel, 1);
   assert.equal(t.atkPerLevel, 0.25);
+});
+
+test("spawnsForKills: integer rates are exact, fractions roll the leftover", () => {
+  // Integer rates never touch the RNG.
+  const explode = () => { throw new Error("rand must not be called"); };
+  assert.equal(core.spawnsForKills(3, 1, explode), 3);
+  assert.equal(core.spawnsForKills(5, 2, explode), 10);
+  assert.equal(core.spawnsForKills(4, 0, explode), 0);
+  // 1 kill at 1.1 → 1 guaranteed, +1 iff the roll lands under 0.1.
+  assert.equal(core.spawnsForKills(1, 1.1, () => 0.05), 2);
+  assert.equal(core.spawnsForKills(1, 1.1, () => 0.5), 1);
+  // 10 kills at 1.1 → exactly 11, no roll left to make.
+  assert.equal(core.spawnsForKills(10, 1.1, explode), 11);
+  // Sub-1 rates work too: 0.5 = a coin flip per kill batch.
+  assert.equal(core.spawnsForKills(1, 0.5, () => 0.49), 1);
+  assert.equal(core.spawnsForKills(1, 0.5, () => 0.51), 0);
+  // The expectation is exactly kills*rate across the roll space:
+  // 7 kills at 1.1 → 7.7 → 7 + P(0.7) — check both branches exist.
+  assert.equal(core.spawnsForKills(7, 1.1, () => 0.69), 8);
+  assert.equal(core.spawnsForKills(7, 1.1, () => 0.71), 7);
 });
 
 /* ---------- strata ---------- */
