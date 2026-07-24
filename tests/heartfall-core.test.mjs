@@ -37,21 +37,87 @@ test("difficulty ordering: easy is strictly more forgiving than hard", () => {
   assert.ok(easy.trickle > normal.trickle && normal.trickle > hard.trickle);
 });
 
-/* ---------- blast progression ---------- */
+/* ---------- upgrade progression ---------- */
 
-test("blastUnlockCost is strictly increasing with no ceiling", () => {
+test("upgradeUnlockCost is strictly increasing with no ceiling", () => {
   let prev = 0;
-  for (let r = 4; r <= 30; r++) {
-    const cost = core.blastUnlockCost(r);
-    assert.ok(cost > prev, `cost(${r})=${cost} should exceed cost(${r - 1})=${prev}`);
+  for (let n = 1; n <= 40; n++) {
+    const cost = core.upgradeUnlockCost(n);
+    assert.ok(cost > prev, `cost(${n})=${cost} should exceed cost(${n - 1})=${prev}`);
     prev = cost;
   }
 });
 
-test("blastUnlockCost matches the published table through radius 8", () => {
-  assert.equal(core.blastUnlockCost(4), 40);
-  assert.equal(core.blastUnlockCost(8), 550);
-  assert.equal(core.blastUnlockCost(9), 850); // 550 + 300
+test("upgradeUnlockCost keeps the early table, then gaps grow geometrically", () => {
+  assert.equal(core.upgradeUnlockCost(1), 40);
+  assert.equal(core.upgradeUnlockCost(5), 550);
+  assert.equal(core.upgradeUnlockCost(6), 890); // 550 + round(200 × 1.7)
+  // Deep-run nerf: the gap between successive upgrades must itself keep
+  // growing (geometric), so a 15M-XP run banks ~20 upgrades, not ~320.
+  for (let n = 7; n <= 30; n++) {
+    const gapPrev = core.upgradeUnlockCost(n - 1) - core.upgradeUnlockCost(n - 2);
+    const gap = core.upgradeUnlockCost(n) - core.upgradeUnlockCost(n - 1);
+    assert.ok(gap > gapPrev * 1.5, `gap(${n})=${gap} should outgrow gap(${n - 1})=${gapPrev}`);
+  }
+  // The run that reached radius 324 earned ~15M XP; that now banks ~24
+  // upgrade choices (split between radius and damage), not 320 radii.
+  assert.ok(core.upgradeUnlockCost(25) > 15_000_000, "radius 324 must be unreachable");
+});
+
+test("blastZombieDamage: 1 outer / 2 core, multiplied by blast damage", () => {
+  assert.equal(core.blastZombieDamage(false), 1);
+  assert.equal(core.blastZombieDamage(true), 2);
+  assert.equal(core.blastZombieDamage(false, 3), 3);
+  assert.equal(core.blastZombieDamage(true, 3), 6);
+});
+
+test("craterBlockDamage scales with blast damage and vanishes past the radius", () => {
+  assert.equal(core.craterBlockDamage(9, 8), 0);
+  assert.equal(core.craterBlockDamage(9, 8, 5), 0);
+  // dead center of a radius-4 blast: base round(4×0.85+1)=4, core-doubled
+  assert.equal(core.craterBlockDamage(0, 4), 8);
+  assert.equal(core.craterBlockDamage(0, 4, 3), 24);
+  // outer ring: base floors at 1, so damage is exactly the blast-damage stat
+  assert.equal(core.craterBlockDamage(4, 4), 1);
+  assert.equal(core.craterBlockDamage(4, 4, 4), 4);
+  // higher damage chews deeper strata: 24 HP breaches sub+rock+ironstone+deepstone
+  const strata = [core.stratumForDepth(1), core.stratumForDepth(2), core.stratumForDepth(5)];
+  assert.ok(core.craterBlockDamage(0, 4, 3) >= strata.reduce((s, x) => s + x.resistance, 0));
+});
+
+/* ---------- horde mutations ---------- */
+
+test("mutationDelay tightens over the run and floors at 45s", () => {
+  assert.equal(core.mutationDelay(0), 80);
+  assert.ok(core.mutationDelay(3) < core.mutationDelay(0));
+  assert.equal(core.mutationDelay(100), 45);
+  assert.equal(core.mutationDelay(0, 1.35), 80 * 1.35); // easy mutates slower
+});
+
+test("mutationAtIndex is seeded: deterministic per (seed, index), varied across them", () => {
+  const a = core.mutationAtIndex("daily-2026-07-24", 0);
+  assert.equal(a, core.mutationAtIndex("daily-2026-07-24", 0));
+  assert.ok(core.MUTATION_POOL.includes(a));
+  // some pair of indices must differ, or the "pool" is a lie
+  const picks = new Set();
+  for (let i = 0; i < 30; i++) picks.add(core.mutationAtIndex("terra", i).key);
+  assert.ok(picks.size > 1);
+});
+
+test("mutation pool entries are well-formed and unique", () => {
+  const keys = core.MUTATION_POOL.map((m) => m.key);
+  assert.equal(new Set(keys).size, core.MUTATION_POOL.length);
+  for (const m of core.MUTATION_POOL) {
+    assert.ok(m.icon && m.name && m.desc, m.key);
+  }
+});
+
+/* ---------- condensation ---------- */
+
+test("condensation halves a fusing cohort, rounding down", () => {
+  assert.equal(core.condenseSurvivors(500), 250);
+  assert.equal(core.condenseSurvivors(501), 250);
+  assert.ok(core.CONDENSE_THRESHOLD >= 100); // a merge, not a cull
 });
 
 /* ---------- zombie curves ---------- */
@@ -142,9 +208,10 @@ test("legacy perk helpers", () => {
   assert.equal(core.freeMines(0), 0);
   assert.equal(core.freeMines(2), 4);
   assert.equal(core.legacyTotalRanks({ heartRank: 2, blastRank: 1, shardRank: 2 }), 5);
-  assert.equal(core.LEGACY_PERKS.length, 6);
+  assert.equal(core.LEGACY_PERKS.length, 7);
   const keys = core.LEGACY_PERKS.map((p) => p.key);
-  assert.equal(new Set(keys).size, 6);
+  assert.equal(new Set(keys).size, 7);
+  assert.ok(keys.includes("damageRank")); // Heavy Ordnance: +1 starting blast damage
 });
 
 test("shop costs escalate per purchase", () => {
@@ -336,11 +403,11 @@ test("daily scores: todayBest resets each day, bestScore is all-time", () => {
 
 /* ---------- achievements & sanitizers ---------- */
 
-test("achievements table has the full 16 with labels", () => {
+test("achievements table has the full 18 with labels", () => {
   const keys = Object.keys(core.ACHIEVEMENTS);
-  assert.equal(keys.length, 16);
+  assert.equal(keys.length, 18);
   for (const k of keys) assert.ok(core.ACHIEVEMENTS[k].startsWith("🏆"));
-  for (const k of ["boss-slayer", "combo-10", "contracts", "streak-3", "kills-1000", "legacy-5", "wave-15", "wave-20"]) {
+  for (const k of ["boss-slayer", "combo-10", "contracts", "streak-3", "kills-1000", "legacy-5", "wave-15", "wave-20", "adapted", "critical-mass"]) {
     assert.ok(keys.includes(k), k);
   }
 });

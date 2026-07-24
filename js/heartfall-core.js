@@ -7,7 +7,10 @@
 //
 // GUIDING PRINCIPLE — no artificial limits. Curves here escalate forever by
 // design (blast costs, combo multipliers, boss levels): do not add caps
-// without explicit user direction.
+// without explicit user direction. The one user-directed pressure valve is
+// CONDENSATION (see CONDENSE_THRESHOLD below): a level's population fuses
+// into half as many next-level zombies at 500 — strength is conserved and
+// keeps escalating, only the entity count is tamed.
 
 /* ---------- seeded PRNG (self-contained copy for contracts/daily) ---------- */
 
@@ -44,17 +47,48 @@ export function heartMaxHp(heartRank, difficulty) {
   return Math.round((100 + heartRank * 20) * DIFFICULTIES[difficulty].hp);
 }
 
-/* ---------- blast-radius progression ---------- */
+/* ---------- blast upgrade progression ---------- */
+// XP thresholds no longer auto-grow the radius — each one banks an upgrade
+// POINT, and the player chooses what it buys: +1 blast radius or +1 blast
+// damage. The old quadratic cost curve let a long run snowball to radius
+// 324; the gap between upgrades now grows geometrically instead, so deep
+// runs still earn upgrades forever (no ceiling) but each one is a real event.
 
 export const STARTING_MAX_BLAST = 3;
-// Cumulative XP needed to unlock each bigger blast radius, up through 8.
-export const BLAST_UNLOCK_XP = { 4: 40, 5: 100, 6: 200, 7: 350, 8: 550 };
+export const STARTING_BLAST_DAMAGE = 1;
+// Cumulative XP for the first upgrade choices (the old radius 4–8 table).
+export const UPGRADE_XP = [40, 100, 200, 350, 550];
+// Past the table, each successive XP gap is ×1.7 the previous one.
+export const UPGRADE_GAP_GROWTH = 1.7;
 
-// No hard ceiling — past 8 the cost keeps escalating indefinitely.
-export function blastUnlockCost(r) {
-  if (r <= 8) return BLAST_UNLOCK_XP[r];
-  const extra = r - 8;
-  return 550 + extra * (300 + (extra - 1) * 150);
+// Cumulative XP needed to bank the nth upgrade point (n is 1-based).
+export function upgradeUnlockCost(n) {
+  if (n <= UPGRADE_XP.length) return UPGRADE_XP[n - 1];
+  let cost = UPGRADE_XP[UPGRADE_XP.length - 1];
+  let gap = UPGRADE_XP[UPGRADE_XP.length - 1] - UPGRADE_XP[UPGRADE_XP.length - 2];
+  for (let i = UPGRADE_XP.length; i < n; i++) {
+    gap = Math.round(gap * UPGRADE_GAP_GROWTH);
+    cost += gap;
+  }
+  return cost;
+}
+
+/* ---------- blast damage ---------- */
+// One blast hits every zombie inside the radius for 1 point — 2 inside the
+// inner core (half the radius) — times the player's blast damage stat.
+// Armor-ignoring: blasts are tech, like turrets and mines.
+export function blastZombieDamage(withinCore, blastDamage = 1) {
+  return (withinCore ? 2 : 1) * blastDamage;
+}
+
+// Terrain hit-points dealt to the column at distance d from the center of a
+// radius-R blast, scaled by blast damage — higher damage punches through
+// more strata per shot, so craters get visibly deeper as damage ranks up
+// (see stratumForDepth for the resistance ladder it chews through).
+export function craterBlockDamage(d, R, blastDamage = 1) {
+  if (d > R) return 0;
+  const base = Math.max(1, Math.round((R - d) * 0.85 + 1));
+  return (d <= Math.floor(R / 2) ? base * 2 : base) * blastDamage;
 }
 
 /* ---------- zombie stat curves ---------- */
@@ -112,6 +146,51 @@ export function bossLevelForWave(waveNumber) {
 // the killing blow (a zombie that eats the boss keeps the XP instead…).
 export function bossBounty(level) { return level * 30; }
 
+/* ---------- horde mutations: timed run-long escalations ---------- */
+// Every so often the whole horde permanently mutates — announced loudly, so
+// the run's difficulty visibly ratchets up over time no matter how wide the
+// player's blasts get. Mutations stack forever (no cap, by design); the
+// numeric effects live in voxel-gen's `mut` state, keyed by `key`.
+
+export const MUTATION_POOL = [
+  { key: "hide", icon: "🦏", name: "Thick Hide", desc: "Zombies gain +25% max HP" },
+  { key: "venom", icon: "🐍", name: "Venom Glands", desc: "Zombie attacks deal +25% damage" },
+  { key: "surge", icon: "💨", name: "Adrenal Surge", desc: "Zombies move +15% faster" },
+  { key: "regen", icon: "♻️", name: "Regeneration", desc: "Zombies knit back together (+0.5 HP/s)" },
+  { key: "arms", icon: "🦑", name: "Long Arms", desc: "Zombies besiege the Heart from +35% farther" },
+  { key: "volatile", icon: "☣️", name: "Volatile", desc: "Zombies destroyed near the Heart burst and harm it" },
+  { key: "bloom", icon: "🍄", name: "Corpse Bloom", desc: "Every devoured zombie lures +0.5 more to the field" },
+];
+
+// Seconds of sim time until the mutation AFTER `index` strikes: the first
+// lands at 80s, then the pace tightens by 5s per mutation down to a 45s
+// floor. waveMul is the difficulty's wave multiplier (easy mutates slower).
+export function mutationDelay(index, waveMul = 1) {
+  return Math.max(45, 80 - index * 5) * waveMul;
+}
+
+// Which mutation strikes at position `index` — seeded, so a daily's mutation
+// sequence is identical for everyone playing that day's board.
+export function mutationAtIndex(seedStr, index) {
+  const rand = mulberry32(hashSeed(`${seedStr}:mutation:${index}`));
+  return MUTATION_POOL[Math.floor(rand() * MUTATION_POOL.length)];
+}
+
+/* ---------- condensation: population converts into strength ---------- */
+// USER-DIRECTED design (an explicit revision of the "no limits" principle,
+// for performance): the total population is still never capped, but when any
+// single stack level accumulates CONDENSE_THRESHOLD living zombies, that
+// whole cohort fuses — every one of them is removed and half as many spawn
+// at the NEXT level up, in their places. Quantity becomes quality: entity
+// counts stay renderable while the horde's strength keeps climbing.
+
+export const CONDENSE_THRESHOLD = 500;
+
+// How many level-(N+1) zombies a fusing cohort of `count` produces.
+export function condenseSurvivors(count) {
+  return Math.floor(count / 2);
+}
+
 /* ---------- economy & scoring ---------- */
 
 export function killPayout(level) { return level * 10; }
@@ -131,6 +210,7 @@ export const LEGACY_PERKS = [
   { key: "heartRank", icon: "💪", name: "Reinforced Heart", desc: "+20 max Heart HP" },
   { key: "energyRank", icon: "⚡", name: "Head Start", desc: "+40 starting energy" },
   { key: "blastRank", icon: "💥", name: "Demolitionist", desc: "+1 starting blast radius" },
+  { key: "damageRank", icon: "⚔️", name: "Heavy Ordnance", desc: "+1 starting blast damage" },
   { key: "turretRank", icon: "🎯", name: "Overcharged Turrets", desc: "+0.5 turret damage" },
   { key: "mineRank", icon: "💣", name: "Minefield", desc: "Start each run with 2 buried mines" },
   { key: "shardRank", icon: "🔮", name: "Shard Magnet", desc: "+15% shards earned" },
@@ -331,6 +411,8 @@ export const ACHIEVEMENTS = {
   "streak-3": "🏆 Devoted — 3-day Daily Challenge streak",
   "kills-1000": "🏆 Legion Slayer — 1,000 lifetime kills",
   "legacy-5": "🏆 Dynasty — earn 5 Legacy ranks",
+  "adapted": "🏆 Adapted — endure 5 horde mutations in one run",
+  "critical-mass": "🏆 Critical Mass — witness 500 zombies condense into a stronger horde",
 };
 
 /* ---------- persisted-state sanitizers ---------- */
@@ -342,7 +424,7 @@ function nonNegNumber(v, fallback = 0) {
 }
 
 export function sanitizeLegacy(raw) {
-  const legacy = { heartRank: 0, energyRank: 0, blastRank: 0, turretRank: 0, mineRank: 0, shardRank: 0, shards: 0 };
+  const legacy = { heartRank: 0, energyRank: 0, blastRank: 0, damageRank: 0, turretRank: 0, mineRank: 0, shardRank: 0, shards: 0 };
   if (raw && typeof raw === "object") {
     for (const k of Object.keys(legacy)) legacy[k] = Math.floor(nonNegNumber(raw[k]));
   }

@@ -84,11 +84,17 @@ const DEPTH_SPARE = 5;
 // spawnsPerEat per zombie eaten by another zombie via resolveZombieKill()
 // (default 1 = eats are population-neutral; 0 = the strong thin the herd).
 // User-chosen slider values are settings, not artificial limits.
+// USER-DIRECTED exception (not a cap): CONDENSATION. When any single stack
+// level accumulates core.CONDENSE_THRESHOLD living zombies, that cohort
+// fuses into half as many zombies of the NEXT level (see checkCondensation)
+// — total strength keeps escalating forever, only the entity count is tamed
+// so the renderer survives. Population totals remain uncapped.
 const MONSTER_COUNT = 9;
 const EAT_DIST = 0.85; // how close two zombies must be to fight (see updateZombieCombat)
 const STARTING_MAX_BLAST = core.STARTING_MAX_BLAST;
-// No hard ceiling — past 8 the cost keeps escalating indefinitely (core).
-const blastUnlockCost = core.blastUnlockCost;
+// XP thresholds bank upgrade POINTS; the player chooses each one's boon
+// (+1 radius or +1 damage). Costs escalate geometrically, no ceiling (core).
+const upgradeUnlockCost = core.upgradeUnlockCost;
 
 let renderer, scene, camera, root;
 let blockMeshes, blockGeo, water, activeMaterials;
@@ -107,9 +113,23 @@ let currentSeed = "terra", monsterIdCounter = 0;
 let lastTime = 0;
 let panHoldTime = 0;
 let maxUnlockedBlast = STARTING_MAX_BLAST;
+let blastDamage = core.STARTING_BLAST_DAMAGE;
+// Upgrade points banked by XP vs spent through the radius/damage chooser.
+let upgradesEarned = 0, upgradesChosen = 0;
 let shake = 0;
 let killCount = 0, xp = 0;
 let lastBlastX = 0, lastBlastZ = 0;
+
+/* ---------- horde mutations (run-long, stacking, announced) ---------- */
+// The numeric side of core.MUTATION_POOL: multipliers layered onto the stat
+// wrappers below, plus the three "effect" mutations (regen ticks in
+// updateMonsters, volatile bursts in the death paths, bloom in
+// resolveZombieKill). Reset every run.
+let mut = { hpMul: 1, dmgMul: 1, speedMul: 1, regen: 0, reachMul: 1, volatile: 0, eatLure: 0 };
+let mutationsApplied = []; // core.MUTATION_POOL entries, in strike order
+let mutationCount = 0;
+let mutationTimer = Infinity; // sim-time countdown to the next strike
+let mutationSeedStr = "terra"; // set per run — daily boards share one sequence
 
 let raycaster, missiles = [], fx = [];
 let missileGeo, missileMat;
@@ -321,8 +341,8 @@ function maybeCelebrateNewBest() {
 }
 
 // ⚡ Energy: the run's spendable currency, earned 1:1 with XP from kills but
-// tracked separately — XP is a lifetime total that drives blast-radius
-// unlocks and must never decrease, while energy is drained by shop purchases.
+// tracked separately — XP is a run-long total that banks upgrade points
+// and must never decrease, while energy is drained by shop purchases.
 let energy = 0;
 let repairCost = core.SHOP.repair.base, turretCost = core.SHOP.turret.base,
   mineCost = core.SHOP.mine.base, slowCost = core.SHOP.slow.base;
@@ -548,11 +568,32 @@ function spawnMonsters(biome, heights, seed) {
       ...createMonsterUi(),
     });
   }
-  killCount = 0;
-  xp = 0;
-  maxUnlockedBlast = STARTING_MAX_BLAST + legacy.blastRank; // Demolitionist legacy perk
   updateScoreHud();
   updateZombieBoard();
+}
+
+// Creates one zombie at an exact spot. Shared by random/invasion spawns and
+// by condensation (which re-spawns fused survivors where their cohort stood).
+function spawnZombieAt(x, z, level = 1, isBoss = false) {
+  const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
+  const rig = createZombieMesh(mats);
+  monsterGroup.add(rig.root);
+  // Bosses stalk rather than sprint — their level's full stackSpeed would be
+  // comical, so it's damped (core.BOSS_SPEED_FACTOR).
+  const speed = isBoss
+    ? stackSpeed(level) * core.BOSS_SPEED_FACTOR
+    : stackSpeed(level) + Math.random() * 0.2;
+  monsters.push({
+    rig, mats, x, z, isBoss,
+    angle: Math.random() * Math.PI * 2,
+    speed,
+    timer: Math.random() * 2,
+    phase: Math.random() * Math.PI * 2,
+    walkPhase: Math.random() * Math.PI * 2,
+    hp: maxHpFor(level), stackLevel: level, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
+    ...initVerticalState(x, z),
+    ...createMonsterUi(),
+  });
 }
 
 // Spawns one fresh zombie at a random valid spot — used to replace a killed
@@ -578,26 +619,55 @@ function spawnRandomZombie(atEdge = false, level = 1, isBoss = false) {
     h = heightAt(x, z);
     if (h > biome.seaLevel && h < biome.snowLine) break;
   }
-  const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
-  const rig = createZombieMesh(mats);
-  monsterGroup.add(rig.root);
-  // Bosses stalk rather than sprint — their level's full stackSpeed would be
-  // comical, so it's damped (core.BOSS_SPEED_FACTOR).
-  const speed = isBoss
-    ? stackSpeed(level) * core.BOSS_SPEED_FACTOR
-    : stackSpeed(level) + Math.random() * 0.2;
-  monsters.push({
-    rig, mats, x, z, isBoss,
-    angle: Math.random() * Math.PI * 2,
-    speed,
-    timer: Math.random() * 2,
-    phase: Math.random() * Math.PI * 2,
-    walkPhase: Math.random() * Math.PI * 2,
-    hp: maxHpFor(level), stackLevel: level, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
-    ...initVerticalState(x, z),
-    ...createMonsterUi(),
-  });
+  spawnZombieAt(x, z, level, isBoss);
   updateZombieBoard();
+}
+
+/* ---------- condensation: 500 of a level fuse into 250 of the next ---------- */
+// The user-directed pressure valve on entity count (see the note by
+// MONSTER_COUNT): the moment any stack level holds CONDENSE_THRESHOLD living
+// non-boss zombies, the whole cohort fuses — all are removed, and half as
+// many spawn at level+1 in the places where they stood. No payouts, no
+// combo, no respawn rolls: it's a merge, not a kill, so it never feeds the
+// player economy or the spawn loops. Bosses never fuse (they're story
+// beats with bounties, not biomass).
+function checkCondensation() {
+  if (monsters.length < core.CONDENSE_THRESHOLD) return; // cheap early-out
+  const byLevel = new Map();
+  for (const m of monsters) {
+    if (m.isBoss) continue;
+    let group = byLevel.get(m.stackLevel);
+    if (!group) byLevel.set(m.stackLevel, (group = []));
+    group.push(m);
+  }
+  let fused = false;
+  for (const [level, group] of byLevel) {
+    if (group.length < core.CONDENSE_THRESHOLD) continue;
+    fused = true;
+    const survivors = core.condenseSurvivors(group.length);
+    const doomed = new Set(group);
+    for (const m of group) {
+      monsterGroup.remove(m.rig.root);
+      disposeZombieMaterials(m.mats);
+      disposeMonsterUi(m);
+    }
+    monsters = monsters.filter((m) => !doomed.has(m));
+    // Fused survivors rise where every other cohort member stood; the fx
+    // burst covers only a sample — hundreds of shockwaves would melt the
+    // frame budget (cosmetic thinning only, the spawns themselves are exact).
+    for (let i = 0; i < survivors; i++) {
+      const src = group[Math.min(group.length - 1, i * 2)];
+      spawnZombieAt(src.x, src.z, level + 1);
+      if (i < 20) spawnEatFx(src.x, heightAt(src.x, src.z) + 1, src.z);
+    }
+    // Newborns pulse so the fusion reads as an event, not a glitch.
+    for (let i = monsters.length - survivors; i < monsters.length; i++) monsters[i].eatPulse = 0.3;
+    showBanner("fuse", "⚗️ CRITICAL MASS", `${group.length} × Lv ${level} CONDENSE`, `${survivors} level-${level + 1} zombies rise from the fusion`);
+    unlockAchievement("critical-mass");
+    playBossSpawn();
+    shake = Math.min(4.5, shake + 1.2);
+  }
+  if (fused) updateZombieBoard();
 }
 
 // Replacement spawns go through this queue instead of appearing instantly,
@@ -673,6 +743,7 @@ function runScore(survivalSeconds) {
 
 function endRun() {
   gameState = "over";
+  updateUpgradeChooser(); // any banked-but-unspent points die with the run
   const now = performance.now() / 1000;
   const survived = now - runStartTime;
   let maxLevel = 1;
@@ -697,6 +768,7 @@ function endRun() {
     `Survived <b>${mins}m ${secs}s</b> across <b>${waveNumber}</b> waves<br>` +
     `Zombies destroyed: <b>${killCount}</b> · Strongest evolved: <b>Lvl ${maxLevel}</b><br>` +
     `Best combo: <b>×${runMaxCombo}</b> · Bosses slain: <b>${bossesKilledThisRun}</b> · ` +
+    `Mutations endured: <b>${mutationCount}</b><br>` +
     `Contracts: <b>${contractsDone}/3</b> · Closest call: <b>${closest}</b>`;
 
   flushRunStats();
@@ -790,6 +862,9 @@ function resetContractsForRun() {
   contractRunNonce++;
   const seedStr = mode === "daily" ? currentSeed : `${currentSeed}:run${contractRunNonce}`;
   contracts = core.generateContracts(seedStr).map((c) => ({ ...c, done: false }));
+  // The horde's mutation sequence shares the contracts' seeding scheme, so a
+  // daily's mutations are the same for everyone playing that day's board.
+  mutationSeedStr = seedStr;
   renderContracts();
 }
 
@@ -862,6 +937,22 @@ function resetRun() {
   combo = { count: 0, expiresAt: -Infinity };
   runMaxCombo = 0;
   bossesKilledThisRun = 0;
+  // Per-run progression: kills, XP, and the blast upgrade tracks reset here
+  // (not in spawnMonsters) so a run started from the title on an existing
+  // world can never inherit a previous run's XP or upgrade points.
+  killCount = 0;
+  xp = 0;
+  maxUnlockedBlast = STARTING_MAX_BLAST + legacy.blastRank; // Demolitionist legacy perk
+  blastDamage = core.STARTING_BLAST_DAMAGE + legacy.damageRank; // Heavy Ordnance legacy perk
+  upgradesEarned = 0;
+  upgradesChosen = 0;
+  // Fresh genome: mutations cleared, first strike scheduled (difficulty-scaled).
+  mut = { hpMul: 1, dmgMul: 1, speedMul: 1, regen: 0, reachMul: 1, volatile: 0, eatLure: 0 };
+  mutationsApplied = [];
+  mutationCount = 0;
+  mutationTimer = core.mutationDelay(0, DIFFICULTIES[difficulty].wave);
+  renderMutationChips();
+  updateUpgradeChooser();
   lowestHeartFrac = 1;
   newBestShown = false;
   runStatsFlushed = false;
@@ -1157,6 +1248,7 @@ function killZombieByPlayer(m, source = "turret") {
   disposeZombieMaterials(m.mats);
   disposeMonsterUi(m);
   spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
+  volatileBurst(m.x, m.z);
   monsters.splice(monsters.indexOf(m), 1);
   playZombieKill(1);
   killCount++;
@@ -1171,7 +1263,7 @@ function killZombieByPlayer(m, source = "turret") {
   if (energy >= 500) unlockAchievement("rich");
   maybeCelebrateNewBest();
   updateScoreHud();
-  checkBlastUnlocks();
+  checkUpgradeUnlocks();
   let toSpawn = core.spawnsForKills(1, spawnsPerKill);
   while (toSpawn-- > 0) queueZombieSpawn();
   updateZombieBoard();
@@ -1240,13 +1332,14 @@ function applyMode() {
 }
 
 // Stat curves live in core; these wrappers bind the live Tweaks-slider
-// slopes so every call site stays unchanged. Blast damage stays flat
-// (1, 2 in the core zone), so raising hpPerLevel directly makes high levels
-// harder for the PLAYER to kill, not just for other zombies.
-function maxHpFor(level) { return core.maxHpFor(level, hpPerLevel); }
-function dpsFor(level) { return core.dpsFor(level, dmgPerLevel); }
+// slopes AND the run's stacking mutation multipliers (see `mut`), so every
+// call site stays unchanged. Blast damage vs zombies is the player's
+// blastDamage stat (see killMonstersNear) — raising hpPerLevel or landing a
+// Thick Hide mutation makes high levels harder for the PLAYER to kill too.
+function maxHpFor(level) { return core.maxHpFor(level, hpPerLevel) * mut.hpMul; }
+function dpsFor(level) { return core.dpsFor(level, dmgPerLevel) * mut.dmgMul; }
 const defenseFor = core.defenseFor;
-function stackSpeed(level) { return core.stackSpeed(level, speedPerLevel); }
+function stackSpeed(level) { return core.stackSpeed(level, speedPerLevel) * mut.speedMul; }
 const eatsNeededForLevel = core.eatsNeededForLevel;
 
 const HP_BAR_W = 0.9, HP_BAR_H = 0.13;
@@ -1331,11 +1424,12 @@ function updateZombieCombat(dt) {
     }
   }
   // Anyone not busy brawling turns its guns on the Heart when close enough —
-  // sieging the objective, not just each other.
+  // sieging the objective, not just each other. The Long Arms mutation
+  // stretches this reach, so a mutated horde opens fire from farther out.
   if (heart && gameState === "playing") {
     for (const m of monsters) {
       if (m.fightTarget) continue;
-      const reach = EAT_DIST * 2.4 * stackScale(m.stackLevel);
+      const reach = EAT_DIST * 2.4 * stackScale(m.stackLevel) * mut.reachMul;
       if (Math.hypot(m.x - heart.x, m.z - heart.z) < reach) m.fightTarget = heart;
     }
   }
@@ -1435,6 +1529,7 @@ function resolveZombieKill(killer, loser) {
 
   spawnEatFx(lx, heightAt(lx, lz) + 1, lz);
   spawnGibs(lx, heightAt(lx, lz) + 0.9, lz);
+  volatileBurst(lx, lz); // devoured counts as destroyed — Volatile still pops
 
   // Losing a boss to the horde is a story beat: whoever ate it inherits its
   // levels (eatXp below), and the bounty is gone. Punish hesitation loudly.
@@ -1442,8 +1537,9 @@ function resolveZombieKill(killer, loser) {
 
   // Replacement spawns — default 1-for-1 keeps eats population-neutral, but
   // it's a tweakable: 0 lets the strong actually thin the herd, higher
-  // values make eating feed the swarm. Fractional values roll stochastically.
-  let eatSpawns = core.spawnsForKills(1, spawnsPerEat);
+  // values make eating feed the swarm (the Corpse Bloom mutation piles its
+  // lure on top of the slider). Fractional values roll stochastically.
+  let eatSpawns = core.spawnsForKills(1, spawnsPerEat + mut.eatLure);
   while (eatSpawns-- > 0) queueZombieSpawn();
 
   // The killer may itself have died from a crossing projectile in the same
@@ -1477,17 +1573,19 @@ function updateScoreHud() {
 
   const radiusEl = document.getElementById("vx-radius-val");
   if (radiusEl) radiusEl.textContent = String(maxUnlockedBlast);
+  const damageEl = document.getElementById("vx-damage-val");
+  if (damageEl) damageEl.textContent = String(blastDamage);
 
   const xpEl = document.getElementById("vx-xp-val");
   if (xpEl) xpEl.textContent = String(xp);
 
   const fillEl = document.getElementById("vx-xp-fill");
   const nextEl = document.getElementById("vx-xp-next");
-  const nextCost = blastUnlockCost(maxUnlockedBlast + 1);
-  const prevCost = maxUnlockedBlast > STARTING_MAX_BLAST ? blastUnlockCost(maxUnlockedBlast) : 0;
+  const nextCost = upgradeUnlockCost(upgradesEarned + 1);
+  const prevCost = upgradesEarned > 0 ? upgradeUnlockCost(upgradesEarned) : 0;
   const pct = Math.max(0, Math.min(1, (xp - prevCost) / (nextCost - prevCost)));
   if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
-  if (nextEl) nextEl.textContent = `${xp} / ${nextCost} XP → radius ${maxUnlockedBlast + 1}`;
+  if (nextEl) nextEl.textContent = `${xp} / ${nextCost} XP → upgrade choice`;
 }
 
 // "Board" panel: how many zombies currently exist at each stack level.
@@ -1506,17 +1604,53 @@ function updateZombieBoard() {
     .join("");
 }
 
-// Bigger blast radii unlock permanently as you earn more XP, with no ceiling —
-// called any time XP changes; announces each new unlock with an on-screen toast.
-function checkBlastUnlocks() {
-  let unlocked = false;
-  while (xp >= blastUnlockCost(maxUnlockedBlast + 1)) {
-    maxUnlockedBlast++;
-    unlocked = true;
-    showToast(`💥 Blast radius ${maxUnlockedBlast} unlocked!`);
+// XP thresholds bank upgrade POINTS (no ceiling — the cost gaps grow
+// geometrically, see core.upgradeUnlockCost); each point is spent through
+// the on-screen chooser on +1 radius OR +1 damage. Called any time XP changes.
+function checkUpgradeUnlocks() {
+  const before = upgradesEarned;
+  while (xp >= upgradeUnlockCost(upgradesEarned + 1)) upgradesEarned++;
+  if (upgradesEarned > before) {
+    playPurchase();
+    if (before === upgradesChosen) showToast("⭐ Upgrade ready — choose: 💥 radius or ⚔️ damage!");
   }
   updateScoreHud();
-  if (unlocked) updateAimIndicator();
+  updateUpgradeChooser();
+}
+
+// The radius/damage chooser panel: visible whenever points are banked and
+// the run is live. Non-blocking by design — the siege doesn't wait, so the
+// player picks in a lull (points queue up; the ×N badge shows the backlog).
+function pendingUpgradePoints() { return upgradesEarned - upgradesChosen; }
+
+function updateUpgradeChooser() {
+  const el = document.getElementById("vx-upgrade");
+  if (!el) return;
+  const show = pendingUpgradePoints() > 0 && gameState === "playing";
+  el.classList.toggle("show", show);
+  if (!show) return;
+  const count = document.getElementById("vx-upgrade-count");
+  if (count) count.textContent = pendingUpgradePoints() > 1 ? ` ×${pendingUpgradePoints()}` : "";
+  const radiusVal = document.getElementById("vx-up-radius-val");
+  if (radiusVal) radiusVal.textContent = `${maxUnlockedBlast} → ${maxUnlockedBlast + 1}`;
+  const damageVal = document.getElementById("vx-up-damage-val");
+  if (damageVal) damageVal.textContent = `${blastDamage} → ${blastDamage + 1}`;
+}
+
+function chooseUpgrade(kind) {
+  if (pendingUpgradePoints() <= 0 || gameState !== "playing") return;
+  upgradesChosen++;
+  if (kind === "radius") {
+    maxUnlockedBlast++;
+    showToast(`💥 Blast radius ${maxUnlockedBlast}!`);
+  } else {
+    blastDamage++;
+    showToast(`⚔️ Blast damage ${blastDamage} — deeper craters, harder hits!`);
+  }
+  playPurchase();
+  updateScoreHud();
+  updateAimIndicator();
+  updateUpgradeChooser();
 }
 
 let toastTimer = null;
@@ -1529,9 +1663,117 @@ function showToast(text) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
 }
 
+// Big center-screen announcement, reserved for run-defining events (horde
+// mutations, condensations) — toasts are for routine feedback. `kind` picks
+// the accent styling: "mut" (genetic purple) or "fuse" (alchemical amber).
+let bannerTimer = null;
+function showBanner(kind, kicker, title, desc) {
+  const el = document.getElementById("vx-banner");
+  if (!el) return;
+  document.getElementById("vx-banner-kicker").textContent = kicker;
+  document.getElementById("vx-banner-title").textContent = title;
+  document.getElementById("vx-banner-desc").textContent = desc;
+  el.className = `${kind} show`;
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => el.classList.remove("show"), 4600);
+}
+
+/* ---------- horde mutations: the timed escalation engine ---------- */
+
+// Folds one drawn mutation into the live `mut` state. Multipliers compound
+// (two Thick Hides = ×1.5625 HP); effect mutations stack additively. Living
+// zombies are adjusted in place so the strike is felt immediately, not just
+// by future spawns.
+function applyMutation(def) {
+  switch (def.key) {
+    case "hide":
+      mut.hpMul *= 1.25;
+      // Scale current HP by the same factor: damage fractions are preserved
+      // (a half-dead zombie stays half-dead, its bar doesn't refill).
+      for (const m of monsters) m.hp *= 1.25;
+      break;
+    case "venom": mut.dmgMul *= 1.25; break;
+    case "surge":
+      mut.speedMul *= 1.15;
+      for (const m of monsters) m.speed *= 1.15;
+      break;
+    case "regen": mut.regen += 0.5; break;
+    case "arms": mut.reachMul *= 1.35; break;
+    case "volatile": mut.volatile += 1; break;
+    case "bloom": mut.eatLure += 0.5; break;
+  }
+}
+
+// Counts down in sim time (pause and menu don't advance it; the sim-speed
+// slider does) and strikes on schedule: draw the seeded mutation, apply it,
+// and announce it with full fanfare. The pace tightens as the run goes on
+// (core.mutationDelay), scaled by difficulty.
+function updateMutations(dt) {
+  if (gameState !== "playing") return;
+  mutationTimer -= dt;
+  if (mutationTimer > 0) return;
+  const def = core.mutationAtIndex(mutationSeedStr, mutationCount);
+  mutationCount++;
+  mutationTimer = core.mutationDelay(mutationCount, DIFFICULTIES[difficulty].wave);
+  mutationsApplied.push(def);
+  applyMutation(def);
+  showBanner("mut", "🧬 HORDE MUTATION", `${def.icon} ${def.name}`, def.desc);
+  playBossSpawn();
+  renderMutationChips();
+  if (mutationCount >= 5) unlockAchievement("adapted");
+}
+
+// The compact "genome" readout under the Heart bar: one chip per distinct
+// mutation with a stack count, so the horde's current buffs stay glanceable
+// (crucial on phones, where the banner is long gone by the time it matters).
+function renderMutationChips() {
+  const el = document.getElementById("vx-mutations");
+  if (!el) return;
+  const stacks = new Map();
+  for (const def of mutationsApplied) {
+    const s = stacks.get(def.key) || { def, n: 0 };
+    s.n++;
+    stacks.set(def.key, s);
+  }
+  el.innerHTML = [...stacks.values()]
+    .map(({ def, n }) => `<span class="mut-chip" title="${def.name}${n > 1 ? ` ×${n}` : ""} — ${def.desc}">${def.icon}${n > 1 ? `×${n}` : ""}</span>`)
+    .join("");
+}
+
+// Volatile mutation: any zombie destroyed close to the Heart bursts and
+// chips it — turtling behind turrets (whose kills land right at the walls)
+// stops being free once the horde turns volatile. Every death path calls
+// this; it no-ops until the mutation is live.
+function volatileBurst(x, z) {
+  if (mut.volatile <= 0 || !heart || gameState !== "playing") return;
+  if (Math.hypot(x - heart.x, z - heart.z) > 3.5) return;
+  damageHeart(mut.volatile);
+  const pos = new THREE.Vector3(x, heightAt(x, z) + 1, z);
+  for (let i = 0; i < 4; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 2.5;
+    const geo = new THREE.BoxGeometry(0.09, 0.09, 0.09);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x8aff3a, transparent: true, opacity: 1,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const s = new THREE.Mesh(geo, mat);
+    s.position.copy(pos);
+    root.add(s);
+    fx.push({
+      type: "spark", obj: s, age: 0, life: 0.3 + Math.random() * 0.15,
+      vx: Math.cos(a) * sp, vz: Math.sin(a) * sp, vy: 2 + Math.random() * 2,
+    });
+  }
+}
+
 function updateMonsters(dt, now) {
   for (const m of monsters) {
     let moving = false;
+    // Regeneration mutation: wounded zombies knit back toward full over sim
+    // time — chip damage (turret bolts, glancing blasts) stops sticking.
+    if (mut.regen > 0 && m.hp < maxHpFor(m.stackLevel)) {
+      m.hp = Math.min(maxHpFor(m.stackLevel), m.hp + mut.regen * dt);
+    }
     // Mid-fight (fightTarget set by updateZombieCombat, one frame behind):
     // plant feet and square up toward the opponent — all damage comes from
     // the projectiles, so a fighting zombie stands its ground and shoots.
@@ -1635,7 +1877,9 @@ function killMonstersNear(bx, bz, r) {
     const m = monsters[i];
     const d = Math.hypot(m.x - bx, m.z - bz);
     if (d > r + 1) continue;
-    m.hp -= d <= coreR ? 2 : 1;
+    // 1 outer / 2 core, times the blast-damage stat — a damage-built run
+    // one-shots stacks a radius-built run only chips (core.blastZombieDamage).
+    m.hp -= core.blastZombieDamage(d <= coreR, blastDamage);
     if (m.hp > 0) {
       spawnHitFlinch(m); // a tall stack survives a hit — knock it back and flash it
       continue;
@@ -1644,6 +1888,7 @@ function killMonstersNear(bx, bz, r) {
     disposeZombieMaterials(m.mats);
     disposeMonsterUi(m);
     spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
+    volatileBurst(m.x, m.z);
     monsters.splice(i, 1);
     kills++;
     earned += core.killPayout(m.stackLevel);
@@ -1666,7 +1911,7 @@ function killMonstersNear(bx, bz, r) {
     if (energy >= 500) unlockAchievement("rich");
     maybeCelebrateNewBest();
     updateScoreHud();
-    checkBlastUnlocks();
+    checkUpgradeUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
     // No cap, intentionally — see the "no artificial limits" note near
     // MONSTER_COUNT. Every kill spawns `spawnsPerKill` more (default 1.1:
@@ -1979,8 +2224,8 @@ function generateWorld(seed, biomeKey, keepZombies = false) {
   if (keepZombies) {
     // Fresh land, same population: keep every zombie (level, hp, eat-XP and
     // all) and just settle them onto the new ground where they stand. Score,
-    // XP, blast unlocks — and the run itself (Heart damage, wave count) —
-    // are untouched: this is a mid-run terrain shuffle, not a restart.
+    // XP, upgrades, mutations — and the run itself (Heart damage, wave
+    // count) — are untouched: a mid-run terrain shuffle, not a restart.
     currentSeaLevel = biome.seaLevel;
     currentSeed = seed;
     for (const m of monsters) {
@@ -2287,22 +2532,19 @@ function applyDamage(idx, dmg) {
 }
 
 function craterEdit(bx, bz) {
-  const R = maxUnlockedBlast, R2 = R + 1.6;
-  const coreR = Math.floor(R / 2); // inner half of the radius — double damage
+  const R = maxUnlockedBlast;
   const cx = Math.round(bx), cz = Math.round(bz);
-  const span = Math.ceil(R2);
+  const span = Math.ceil(R);
   for (let dz = -span; dz <= span; dz++) {
     for (let dx = -span; dx <= span; dx++) {
       const x = cx + dx, z = cz + dz;
       if (x < 0 || z < 0 || x >= GRID || z >= GRID) continue; // stay in array bounds only — edges are destructible too
       const d = Math.hypot(dx, dz);
-      if (d > R2) continue;
-      const idx = z * GRID + x;
-      if (d <= R) {
-        const base = Math.max(1, Math.round((R - d) * 0.85 + 1));
-        const dmg = d <= coreR ? base * 2 : base;
-        applyDamage(idx, dmg);
-      }
+      // Distance falloff × the blast-damage stat (core.craterBlockDamage):
+      // damage ranks punch through whole strata per shot, so a damage build
+      // leaves genuinely deeper scars on the map than a radius build.
+      const dmg = core.craterBlockDamage(d, R, blastDamage);
+      if (dmg > 0) applyDamage(z * GRID + x, dmg);
     }
   }
 }
@@ -2350,8 +2592,8 @@ function explodeAt(bx, bz) {
     showToast("⚠️ You hit the Heart!");
   }
 
-  shake = Math.min(4.5, shake + 0.25 + maxUnlockedBlast * 0.45);
-  playExplosion(maxUnlockedBlast);
+  shake = Math.min(4.5, shake + 0.25 + maxUnlockedBlast * 0.45 + (blastDamage - 1) * 0.2);
+  playExplosion(maxUnlockedBlast + (blastDamage - 1)); // damage ranks deepen the boom too
 
   const center = new THREE.Vector3(bx, groundYBefore, bz);
 
@@ -2416,7 +2658,8 @@ function explodeAt(bx, bz) {
   }
 
   const debrisColor = currentBiome.rock;
-  const debrisCount = Math.min(24, 8 + maxUnlockedBlast * 2);
+  // More rock flies as damage ranks up — the crater got deeper, after all.
+  const debrisCount = Math.min(40, 8 + maxUnlockedBlast * 2 + (blastDamage - 1) * 3);
   for (let i = 0; i < debrisCount; i++) {
     const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 5;
     const size = 0.12 + Math.random() * 0.18;
@@ -2813,6 +3056,10 @@ function init() {
     keys[e.key.toLowerCase()] = true;
     if (e.key.toLowerCase() === "r") restartRun();
     if (e.key.toLowerCase() === "p") togglePause();
+    // Spend a banked upgrade point without mousing away from the fight —
+    // chooseUpgrade itself no-ops when nothing is pending.
+    if (e.key === "1") chooseUpgrade("radius");
+    if (e.key === "2") chooseUpgrade("damage");
   });
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -2859,6 +3106,8 @@ function init() {
   });
 
   document.getElementById("vx-go-restart").addEventListener("click", restartRun);
+  document.getElementById("vx-up-radius")?.addEventListener("click", () => chooseUpgrade("radius"));
+  document.getElementById("vx-up-damage")?.addEventListener("click", () => chooseUpgrade("damage"));
   document.getElementById("vx-shop-repair").addEventListener("click", buyRepair);
   document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
   document.getElementById("vx-shop-mine").addEventListener("click", buyMine);
@@ -3028,6 +3277,8 @@ function loop() {
     updateMines();
     processPendingSpawns(now);
     updateWaves(dt * simSpeed);
+    updateMutations(dt * simSpeed);
+    checkCondensation();
     // Slow-field dome: sits on the Heart while active, vanishes after.
     if (slowDome && heart) {
       const active = now < slowUntil;
@@ -3170,6 +3421,7 @@ function togglePause() {
   }
   document.getElementById("vx-paused")?.classList.toggle("show", gameState === "paused");
   updateShopHud();
+  updateUpgradeChooser(); // hidden while paused, back if points remain
 }
 
 // version.json is generated by the deploy workflow (stamped with the commit

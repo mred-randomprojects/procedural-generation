@@ -24,6 +24,21 @@
       <span id="vx-wave-val">Wave 0</span>
     </div>
     <div class="hud-heart-bar"><div id="vx-heart-fill"></div></div>
+    <div id="vx-mutations"></div>
+  </div>
+
+  <div id="vx-banner">
+    <div class="banner-kicker" id="vx-banner-kicker"></div>
+    <div class="banner-title" id="vx-banner-title"></div>
+    <div class="banner-desc" id="vx-banner-desc"></div>
+  </div>
+
+  <div id="vx-upgrade" class="hud-panel">
+    <div class="upgrade-title">⭐ Upgrade ready<span id="vx-upgrade-count"></span> — choose:</div>
+    <div class="upgrade-btns">
+      <button id="vx-up-radius" title="Widen every blast's footprint">💥 Radius <span class="upgrade-next" id="vx-up-radius-val">3 → 4</span><kbd class="only-fine">1</kbd></button>
+      <button id="vx-up-damage" title="Blasts hit zombies harder and carve deeper craters">⚔️ Damage <span class="upgrade-next" id="vx-up-damage-val">1 → 2</span><kbd class="only-fine">2</kbd></button>
+    </div>
   </div>
 
   <div id="vx-gameover">
@@ -117,7 +132,7 @@
         <span id="vx-xp-val">0</span>
       </div>
       <div class="hud-xp-bar"><div id="vx-xp-fill" class="hud-xp-fill"></div></div>
-      <div id="vx-xp-next" class="hud-xp-next">0 / 40 XP → radius 4</div>
+      <div id="vx-xp-next" class="hud-xp-next">0 / 40 XP → upgrade choice</div>
     </div>
   </div>
 
@@ -140,6 +155,10 @@
     <div class="hud-row">
       <span class="hud-label">Blast radius</span>
       <span id="vx-radius-val">3</span>
+    </div>
+    <div class="hud-row">
+      <span class="hud-label">Blast damage</span>
+      <span id="vx-damage-val">1</span>
     </div>
     <div class="hud-row">
       <button id="vx-locate-elite" title="Circle the current strongest zombie(s)">🎯 Locate strongest</button>
@@ -229,7 +248,7 @@
   <div id="hud-hint" class="hud-panel">
     <span class="only-fine">
       Drag — rotate &nbsp;·&nbsp; ⌘/⌥ + drag — pan &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
-      Click — fire missile &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
+      Click — fire missile &nbsp;·&nbsp; 1/2 — spend upgrade &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
     </span>
     <span class="only-coarse">
       Tap — fire (hold to aim) · Drag — rotate · 2 fingers — pan · Pinch — zoom
