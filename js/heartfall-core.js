@@ -47,6 +47,14 @@ export function heartMaxHp(heartRank, difficulty) {
   return Math.round((100 + heartRank * 20) * DIFFICULTIES[difficulty].hp);
 }
 
+// A 🔧 Repair restores a FRACTION of the Heart's maximum, not a flat 30 —
+// so Reinforced Heart ranks make every future repair bigger too, and the
+// perk compounds instead of being outscaled by the escalating repair price.
+export const REPAIR_FRACTION = 0.3;
+export function repairAmount(maxHp) {
+  return Math.max(1, Math.round(maxHp * REPAIR_FRACTION));
+}
+
 /* ---------- blast upgrade progression ---------- */
 // XP thresholds no longer auto-grow the radius — each one banks an upgrade
 // POINT, and the player chooses what it buys: +1 blast radius or +1 blast
@@ -116,6 +124,42 @@ export function attackInterval(level, atkPerLevel = 0.25) { return 1.0 / (1 + at
 // Damage one projectile deals after the target's flat armor.
 export function effectiveHitDamage(dps, interval, targetLevel) {
   return Math.max(0, (dps - defenseFor(targetLevel)) * interval);
+}
+
+/* ---------- zombie archetypes: breeds within the horde ---------- */
+// Every level curve above is shared by the whole horde; an archetype is a
+// multiplier set layered on top, rolled once when a zombie spawns and kept
+// for life (a Runner that eats its way to level 9 is a level 9 Runner).
+// They exist so a wave reads as a mixed force rather than N copies of one
+// stat block: Runners rush the line, Brutes soak it, Spitters siege the
+// Heart from outside a bolt turret's comfortable range.
+//
+// `scale` is body size (visual + hp-bar height only — it deliberately does
+// NOT change blast footprints, so aiming stays honest). `tint` multiplies
+// the zombie's skin texture so each breed is identifiable at a glance.
+
+export const ARCHETYPES = {
+  walker: { key: "walker", icon: "🧟", name: "Walker", hp: 1, speed: 1, dmg: 1, reach: 1, scale: 1, tint: null },
+  runner: { key: "runner", icon: "🏃", name: "Runner", hp: 0.6, speed: 1.7, dmg: 0.8, reach: 1, scale: 0.85, tint: 0xff8a66 },
+  brute: { key: "brute", icon: "🪨", name: "Brute", hp: 2.6, speed: 0.6, dmg: 1.3, reach: 1, scale: 1.35, tint: 0x8fa2bb },
+  spitter: { key: "spitter", icon: "🧪", name: "Spitter", hp: 0.8, speed: 0.9, dmg: 1.4, reach: 2.2, scale: 0.95, tint: 0xb6ff5a },
+};
+
+// Breeds other than the plain Walker. Boss spawns never roll one — a boss is
+// already its own stat block.
+export const SPECIAL_ARCHETYPES = ["runner", "brute", "spitter"];
+
+// Odds that a given spawn is a special breed. Zero at wave 0 (the opening
+// minute is plain walkers, so the breeds read as an escalation when they
+// arrive) and asymptotic to 1 — no cap, the horde just keeps diversifying.
+export function archetypeChance(waveNumber) {
+  const w = Math.max(0, waveNumber);
+  return w / (w + 9);
+}
+
+export function rollArchetype(waveNumber, rand = Math.random) {
+  if (rand() >= archetypeChance(waveNumber)) return ARCHETYPES.walker;
+  return ARCHETYPES[SPECIAL_ARCHETYPES[Math.floor(rand() * SPECIAL_ARCHETYPES.length)]];
 }
 
 /* ---------- waves & bosses ---------- */
@@ -239,6 +283,10 @@ export const LEGACY_PERKS = [
   { key: "damageRank", icon: "⚔️", name: "Heavy Ordnance", desc: "+1 starting blast damage" },
   { key: "turretRank", icon: "🎯", name: "Overcharged Turrets", desc: "+0.5 turret damage" },
   { key: "mineRank", icon: "💣", name: "Minefield", desc: "Start each run with 2 buried mines" },
+  { key: "rateRank", icon: "⏩", name: "Rapid Coils", desc: "Towers fire 25% faster" },
+  { key: "boltRank", icon: "🚀", name: "Hypervelocity", desc: "Tower bolts fly 25% faster" },
+  { key: "groundRank", icon: "🕯️", name: "Consecrated Ground", desc: "+2 starting Sanctuary radius" },
+  { key: "comboRank", icon: "🔥", name: "Killing Spree", desc: "+0.5s to the combo window" },
   { key: "shardRank", icon: "🔮", name: "Shard Magnet", desc: "+15% shards earned" },
 ];
 
@@ -252,12 +300,92 @@ export function legacyTotalRanks(legacy) {
   return LEGACY_PERKS.reduce((sum, p) => sum + (legacy[p.key] || 0), 0);
 }
 
+/* ---------- tower fire rate ---------- */
+// Seconds between shots. `ranks` pools Legacy Rapid Coils with in-run ⏩
+// picks (same +25% fire rate each), so cadence keeps improving forever —
+// the interval shrinks hyperbolically toward, but never reaches, zero.
+export const TOWER_BASE_COOLDOWN = 0.8;
+export function towerCooldown(ranks = 0) {
+  return TOWER_BASE_COOLDOWN / (1 + 0.25 * ranks);
+}
+
+/* ---------- tower types ---------- */
+// Three buildable towers, each answering a different failure mode: bolt
+// turrets for steady single-target damage, frost towers for crowd control
+// once the horde arrives faster than it can be shot, arc towers for the
+// packed late-run swarms where one bolt per second is wasted on one body.
+// All three share the same damage/range/rate upgrade tracks; the per-type
+// factors below are what make them feel distinct.
+
+export const ARC_CHAIN = 3;         // bodies one arc shot jumps through
+export const ARC_JUMP = 5;          // max blocks between two links of a fork
+// Tuned so a full 3-body fork out-damages a bolt turret per second (1.5 vs
+// 1.25 at rank 0) while a lone straggler is less than half as good — the arc
+// tower must be a genuine choice, not a strict upgrade or a strict downgrade.
+export const ARC_DAMAGE_FACTOR = 0.6;  // per body — less per hit, more total
+export const ARC_COOLDOWN_FACTOR = 1.5; // …but it winds up half again as slowly
+export const FROST_SLOW = 0.45;     // speed multiplier inside a frost aura
+export const FROST_TICK = 1;        // seconds between chill damage ticks
+export const FROST_DAMAGE_FACTOR = 0.5; // chill damage per tick, per body
+export const LANCE_WIDTH = 0.9;     // blocks either side of the beam that get hit
+// Nearly a bolt turret's damage per body, at a third of the cadence: four
+// zombies lined up is the break-even point, and everything past that is
+// pure profit (the pierce itself is unbounded).
+export const LANCE_DAMAGE_FACTOR = 0.9; // per body — the pierce is the payoff
+export const LANCE_COOLDOWN_FACTOR = 3; // …paid for with a long, visible wind-up
+
+export const TOWER_TYPES = [
+  { key: "bolt", icon: "🗼", name: "Bolt Turret", shop: "turret", desc: "Snipes the nearest zombie" },
+  { key: "frost", icon: "❄️", name: "Frost Tower", shop: "frost", desc: "Chills and slows every zombie in its aura" },
+  { key: "arc", icon: "⚡", name: "Arc Tower", shop: "arc", desc: "One shot forks through 3 bodies" },
+  { key: "lance", icon: "🔱", name: "Lance Tower", shop: "lance", desc: "Beam pierces every zombie in a line" },
+];
+
+// Arc towers trade per-body damage and cadence for hitting a whole clump.
+export function arcDamage(ranks) { return turretDamage(ranks) * ARC_DAMAGE_FACTOR; }
+export function arcCooldown(ranks = 0) { return towerCooldown(ranks) * ARC_COOLDOWN_FACTOR; }
+// Frost auras are tighter than a bolt turret's targeting radius (they're a
+// zone you must walk into, not a sniper's reach) but grow with 📡 picks too.
+export function frostRadius(rangeUps = 0) { return 5 + 1.5 * rangeUps; }
+export function frostTickDamage(ranks) { return turretDamage(ranks) * FROST_DAMAGE_FACTOR; }
+// Lance towers pierce an UNBOUNDED number of bodies — the line is the whole
+// point, so nothing caps it. The nerf is positional and temporal instead:
+// the beam only hits what happens to be lined up, and the tower spends three
+// bolt-turret cooldowns winding the shot up.
+export function lanceDamage(ranks) { return turretDamage(ranks) * LANCE_DAMAGE_FACTOR; }
+export function lanceCooldown(ranks = 0) { return towerCooldown(ranks) * LANCE_COOLDOWN_FACTOR; }
+
+/* ---------- bolt travel speed ---------- */
+// Blocks per second a tower projectile flies. Slow bolts miss fast movers
+// (a Runner can outpace the shot that was aimed at it), so 🚀 picks and the
+// Hypervelocity legacy perk are worth real money on a Runner-heavy board.
+export const BOLT_BASE_SPEED = 30;
+export function boltSpeed(ranks = 0) { return BOLT_BASE_SPEED * (1 + 0.25 * ranks); }
+
+/* ---------- the Sanctuary: consecrated ground around the Heart ---------- */
+// Fresh zombies never materialize on top of the Heart: every random spawn
+// is pushed outside this radius. The 🛡️ Ward shop item consecrates more
+// ground each purchase, so a rich player can buy breathing room — the horde
+// then has to WALK in from further out, which is exactly the time a turret
+// line needs. Wave invaders already arrive from the map rim, so this only
+// ever moves the trickle/replacement spawns.
+export const SANCTUARY_BASE = 9;
+export const SANCTUARY_PER_WARD = 4;
+export const SANCTUARY_PER_LEGACY = 2; // Consecrated Ground: banked between runs
+export function sanctuaryRadius(wardRank = 0, groundRank = 0) {
+  return SANCTUARY_BASE + SANCTUARY_PER_WARD * wardRank + SANCTUARY_PER_LEGACY * groundRank;
+}
+
 // Shop pricing: base cost + per-purchase growth so the run stays a squeeze.
 export const SHOP = {
   repair: { base: 50, growth: 1.5 },
   turret: { base: 120, growth: 1.6 },
+  frost: { base: 200, growth: 1.6 },
+  arc: { base: 260, growth: 1.7 },
+  lance: { base: 320, growth: 1.7 },
   mine: { base: 40, growth: 1.3 },
   slow: { base: 80, growth: 1.5 },
+  ward: { base: 150, growth: 1.8 },
 };
 export function nextShopCost(currentCost, item) {
   return Math.round(currentCost * SHOP[item].growth);
@@ -270,13 +398,17 @@ export function nextShopCost(currentCost, item) {
 
 export const COMBO_WINDOW = 4; // seconds a combo stays alive after each kill
 
+// Killing Spree legacy ranks buy breathing room between kills — the whole
+// combo economy (payout multiplier, the ×10 achievement) opens up with it.
+export function comboWindow(comboRank = 0) { return COMBO_WINDOW + 0.5 * comboRank; }
+
 export function comboMultiplier(count) {
   return count <= 1 ? 1 : 1 + (count - 1) * 0.15;
 }
 
-export function applyCombo(state, kills, now) {
+export function applyCombo(state, kills, now, window = COMBO_WINDOW) {
   const count = now > state.expiresAt ? kills : state.count + kills;
-  return { count, expiresAt: now + COMBO_WINDOW };
+  return { count, expiresAt: now + window };
 }
 
 /* ---------- canonical ranked balance for the Tweaks sliders ---------- */
@@ -338,7 +470,9 @@ export const CONTRACT_POOL = [
   { key: "kill-count", icon: "🧟", kind: "kills", tiers: [40, 75, 120], label: (n) => `Destroy ${n} zombies` },
   { key: "elite-kill", icon: "👑", kind: "maxLevelKilled", tiers: [3, 4, 5], label: (n) => `Destroy a level ${n}+ zombie` },
   { key: "hold-energy", icon: "⚡", kind: "maxEnergy", tiers: [250, 400], label: (n) => `Hold ${n} energy at once` },
-  { key: "no-repair", icon: "🛡️", kind: "noRepairWave", tiers: [4, 6], label: (n) => `Reach wave ${n} before your first repair` },
+  { key: "no-repair", icon: "🩹", kind: "noRepairWave", tiers: [4, 6], label: (n) => `Reach wave ${n} before your first repair` },
+  { key: "build-towers", icon: "🏗️", kind: "towersBuilt", tiers: [3, 5], label: (n) => `Raise ${n} towers` },
+  { key: "consecrate", icon: "🛡️", kind: "wardRank", tiers: [1, 2], label: (n) => `Extend the Sanctuary ${n}×` },
 ];
 
 export function generateContracts(seedStr) {
@@ -359,6 +493,7 @@ export function freshRunCounters() {
   return {
     kills: 0, wave: 0, maxBlastKills: 0, mineKills: 0, turretKills: 0,
     maxLevelKilled: 0, maxEnergy: 0, waveAtFirstRepair: Infinity,
+    towersBuilt: 0, wardRank: 0,
   };
 }
 
@@ -371,6 +506,8 @@ export function contractProgress(contract, counters) {
     case "kills": return counters.kills;
     case "maxLevelKilled": return counters.maxLevelKilled;
     case "maxEnergy": return counters.maxEnergy;
+    case "towersBuilt": return counters.towersBuilt;
+    case "wardRank": return counters.wardRank;
     // Frozen at the wave you first repaired on — repairing before the target
     // wave locks this contract out for the rest of the run.
     case "noRepairWave": return Math.min(counters.wave, counters.waveAtFirstRepair);
@@ -443,6 +580,11 @@ export const ACHIEVEMENTS = {
   "legacy-5": "🏆 Dynasty — earn 5 Legacy ranks",
   "adapted": "🏆 Adapted — endure 5 horde mutations in one run",
   "critical-mass": "🏆 Critical Mass — witness 200 zombies condense into a stronger horde",
+  "frostbite": "🏆 Frostbite — raise a Frost Tower",
+  "arclight": "🏆 Arclight — raise an Arc Tower",
+  "lancer": "🏆 Lancer — raise a Lance Tower",
+  "sanctuary": "🏆 Consecrated — extend the Sanctuary 3 times in one run",
+  "menagerie": "🏆 Menagerie — face a Runner, a Brute and a Spitter in one run",
 };
 
 /* ---------- persisted-state sanitizers ---------- */
@@ -454,7 +596,11 @@ function nonNegNumber(v, fallback = 0) {
 }
 
 export function sanitizeLegacy(raw) {
-  const legacy = { heartRank: 0, energyRank: 0, blastRank: 0, damageRank: 0, turretRank: 0, mineRank: 0, shardRank: 0, shards: 0 };
+  const legacy = {
+    heartRank: 0, energyRank: 0, blastRank: 0, damageRank: 0, turretRank: 0,
+    rateRank: 0, boltRank: 0, groundRank: 0, comboRank: 0, mineRank: 0,
+    shardRank: 0, shards: 0,
+  };
   if (raw && typeof raw === "object") {
     for (const k of Object.keys(legacy)) legacy[k] = Math.floor(nonNegNumber(raw[k]));
   }

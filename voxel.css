@@ -236,7 +236,12 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap; /* eight items: two tidy rows beats one off-screen row */
+  justify-content: center;
+  /* Eight items fit one row on a normal desktop; narrower windows wrap to
+     a second row rather than pushing buttons off-screen. */
+  max-width: min(1120px, calc(100vw - 40px));
+  gap: 8px;
   padding: 8px 10px;
 }
 #hud-shop button {
@@ -244,7 +249,7 @@ html, body {
   color: #b8f5c9;
   border: 1px solid #2e9650;
   border-radius: 9px;
-  padding: 8px 14px;
+  padding: 8px 12px;
   font-size: 13.5px;
   cursor: pointer;
   white-space: nowrap;
@@ -275,6 +280,11 @@ html, body {
   text-align: center;
   color: #e6ebf1;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  /* The Legacy storefront keeps growing; the panel scrolls rather than
+     running its bottom rows (and the Defend-again button) off-screen. */
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
 }
 .go-panel h2 { margin: 0 0 14px; font-size: 22px; color: #ff8a70; }
 #vx-go-stats { font-size: 14px; line-height: 1.75; margin-bottom: 18px; color: #c9d4de; }
@@ -644,9 +654,31 @@ body.daily #vx-new:disabled {
 .hud-board-row span:first-child { color: #cddae6; }
 .hud-board-row span:last-child { color: #c99bff; font-weight: 700; }
 
+/* Breed/tower rows carry their explanation inline: the board panel scrolls,
+   so a hover card would be clipped by its own container. */
+.hud-board-note {
+  color: #7f93a5;
+  font-size: 10.5px;
+  line-height: 1.35;
+  margin: 0 0 3px;
+  padding-left: 2px;
+}
+
 .hud-board-empty {
   color: #6b7684;
   font-style: italic;
+}
+
+/* Section headers inside the board panel (breeds afield, towers standing). */
+.hud-board-head {
+  margin: 7px 0 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #7f93a5;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 6px;
 }
 
 /* Contracts: three optional per-run objectives with live progress. */
@@ -735,6 +767,108 @@ body.daily #vx-new:disabled {
   white-space: nowrap;
 }
 
+/* ---------- hover explanations ---------- */
+/* A native `title` takes ~1s to appear, can't be styled, and never fires on
+   a phone. Anything carrying data-tip gets this instead: an instant, legible
+   card. Phones fall back to tapping the element (mutation chips toast their
+   text; shop buttons are self-evident once bought). */
+
+[data-tip] { position: relative; }
+
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(3px);
+  width: max-content;
+  max-width: 260px;
+  white-space: normal;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(10, 14, 20, 0.97);
+  border: 1px solid rgba(140, 170, 200, 0.35);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
+  color: #dce6f0;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0.1px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 60;
+}
+
+/* Only on devices with a real pointer — a tap must never leave a card stuck
+   open over the battlefield. */
+@media (hover: hover) and (pointer: fine) {
+  [data-tip]:hover::after,
+  [data-tip]:focus-visible::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Mutation chips live at the very top of the screen — their cards drop
+   DOWN, or they'd render off the top edge. */
+.mut-chip[data-tip]::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+  transform: translateX(-50%) translateY(-3px);
+}
+@media (hover: hover) and (pointer: fine) {
+  .mut-chip[data-tip]:hover::after,
+  .mut-chip[data-tip]:focus-visible::after { transform: translateX(-50%) translateY(0); }
+}
+
+/* ---------- tower inspector (hover a tower in the world) ---------- */
+#vx-tower-tip {
+  position: absolute;
+  z-index: 70;
+  width: 240px;
+  padding: 10px 12px 9px;
+  border-radius: 10px;
+  background: rgba(10, 14, 20, 0.96);
+  border: 1px solid rgba(140, 200, 190, 0.4);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+  color: #dce6f0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+#vx-tower-tip.show { opacity: 1; }
+#vx-tower-tip .tip-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #eaf3ff;
+  margin-bottom: 2px;
+}
+#vx-tower-tip .tip-desc {
+  color: #93a6b8;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+#vx-tower-tip .tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 0;
+}
+#vx-tower-tip .tip-row span:first-child { color: #93a6b8; }
+#vx-tower-tip .tip-row span:last-child { color: #b8f5c9; font-weight: 600; }
+#vx-tower-tip .tip-foot {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #6f8091;
+  font-size: 10px;
+}
+
 /* ---------- big center-screen event banner (mutations, condensation) ---------- */
 
 #vx-banner {
@@ -781,7 +915,8 @@ body.daily #vx-new:disabled {
 /* ---------- upgrade chooser: 💥 radius vs ⚔️ damage ---------- */
 
 #vx-upgrade {
-  bottom: 118px;
+  /* Clears the shop even when it wraps to a second row of buttons. */
+  bottom: 128px;
   left: 50%;
   transform: translateX(-50%);
   display: none;
@@ -1048,11 +1183,13 @@ input, select { -webkit-user-select: text; user-select: text; }
     bottom: calc(52px + env(safe-area-inset-bottom));
     transform: none;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 8px;
-    padding: 8px;
+    /* Eight items on a phone: three compact columns, not two fat ones. */
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    gap: 6px;
+    padding: 7px;
   }
-  #hud-shop button { padding: 9px 8px; font-size: 13px; }
+  #hud-shop button { padding: 8px 4px; font-size: 12px; }
+  .shop-cost { margin-left: 2px; }
 
   #hud-hint {
     bottom: calc(6px + env(safe-area-inset-bottom));
@@ -1081,12 +1218,19 @@ input, select { -webkit-user-select: text; user-select: text; }
   #vx-upgrade {
     left: calc(10px + env(safe-area-inset-left));
     right: calc(10px + env(safe-area-inset-right));
-    bottom: calc(170px + env(safe-area-inset-bottom));
+    bottom: calc(206px + env(safe-area-inset-bottom)); /* clears the 3-row shop */
     transform: none;
     padding: 7px 8px 8px;
   }
-  /* 2×2 grid — four choices in one row don't fit a phone width. */
-  .upgrade-btns button { flex: 1 1 40%; padding: 8px 6px; font-size: 12.5px; }
+  /* 2-up grid — six choices in one row don't fit a phone width. */
+  .upgrade-btns button { flex: 1 1 40%; padding: 7px 6px; font-size: 12px; }
+  /* Six choices stack three rows deep; the chooser scrolls rather than
+     shoving the shop off the bottom of the screen. */
+  #vx-upgrade { max-height: 40vh; overflow-y: auto; }
+  /* Hover cards are a pointer-device affordance; on phones the tap handlers
+     (mutation chips) do the explaining instead. */
+  [data-tip]::after { display: none; }
+  #vx-tower-tip { display: none; }
   .upgrade-title { font-size: 11.5px; margin-bottom: 5px; }
 
   .banner-title { font-size: 25px; }

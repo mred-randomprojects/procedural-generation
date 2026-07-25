@@ -36,10 +36,12 @@
   <div id="vx-upgrade" class="hud-panel">
     <div class="upgrade-title">⭐ Upgrade ready<span id="vx-upgrade-count"></span> — choose:</div>
     <div class="upgrade-btns">
-      <button id="vx-up-radius" title="Widen every blast's footprint">💥 Radius <span class="upgrade-next" id="vx-up-radius-val">3 → 4</span><kbd class="only-fine">1</kbd></button>
-      <button id="vx-up-damage" title="Blasts hit zombies harder and carve deeper craters">⚔️ Damage <span class="upgrade-next" id="vx-up-damage-val">1 → 2</span><kbd class="only-fine">2</kbd></button>
-      <button id="vx-up-turretdmg" title="Every turret bolt hits harder (also boosts future turrets)">🎯 Turret dmg <span class="upgrade-next" id="vx-up-turretdmg-val">1 → 1.5</span><kbd class="only-fine">3</kbd></button>
-      <button id="vx-up-turretrange" title="Turrets target zombies further from their perch">📡 Turret range <span class="upgrade-next" id="vx-up-turretrange-val">8 → 10</span><kbd class="only-fine">4</kbd></button>
+      <button id="vx-up-radius" data-tip="Widen every blast's footprint">💥 Radius <span class="upgrade-next" id="vx-up-radius-val">3 → 4</span><kbd class="only-fine">1</kbd></button>
+      <button id="vx-up-damage" data-tip="Blasts hit zombies harder and carve deeper craters">⚔️ Damage <span class="upgrade-next" id="vx-up-damage-val">1 → 2</span><kbd class="only-fine">2</kbd></button>
+      <button id="vx-up-turretdmg" data-tip="Every tower hits harder — bolts, arcs, lances and frost auras alike (future towers too)">🎯 Tower dmg <span class="upgrade-next" id="vx-up-turretdmg-val">1 → 1.5</span><kbd class="only-fine">3</kbd></button>
+      <button id="vx-up-turretrange" data-tip="Towers reach further from their perch; frost auras widen too">📡 Tower range <span class="upgrade-next" id="vx-up-turretrange-val">8 → 10</span><kbd class="only-fine">4</kbd></button>
+      <button id="vx-up-turretrate" data-tip="Every tower winds up faster — more shots per second across the whole line">⏩ Fire rate <span class="upgrade-next" id="vx-up-turretrate-val">1.25 → 1.56/s</span><kbd class="only-fine">5</kbd></button>
+      <button id="vx-up-boltspeed" data-tip="Tower bolts fly faster, so they stop losing races with Runners">🚀 Bolt speed <span class="upgrade-next" id="vx-up-boltspeed-val">30 → 37</span><kbd class="only-fine">6</kbd></button>
     </div>
   </div>
 
@@ -104,11 +106,17 @@
   </div>
 
   <div id="hud-shop" class="hud-panel">
-    <button id="vx-shop-repair" title="Restore 30 Heart HP">🔧 Repair <span class="shop-cost" id="vx-repair-cost">50⚡</span></button>
-    <button id="vx-shop-turret" title="Build an auto-firing turret near the Heart">🗼 Turret <span class="shop-cost" id="vx-turret-cost">120⚡</span></button>
-    <button id="vx-shop-mine" title="Bury a proximity mine on the approach to the Heart">💣 Mine <span class="shop-cost" id="vx-mine-cost">40⚡</span></button>
-    <button id="vx-shop-slow" title="Slow every zombie near the Heart for 15s">🧊 Slow <span class="shop-cost" id="vx-slow-cost">80⚡</span></button>
+    <button id="vx-shop-repair" data-tip="Repair — restores 30% of the Heart's maximum HP, so Reinforced Heart ranks make every repair bigger">🔧 Repair <span class="shop-cost" id="vx-repair-cost">50⚡</span></button>
+    <button id="vx-shop-turret" data-tip="Bolt Turret — snipes the nearest zombie. The reliable single-target backbone">🗼 Turret <span class="shop-cost" id="vx-turret-cost">120⚡</span></button>
+    <button id="vx-shop-frost" data-tip="Frost Tower — no bolts: a chill aura that slows everything inside it and gnaws at all of them at once">❄️ Frost <span class="shop-cost" id="vx-frost-cost">200⚡</span></button>
+    <button id="vx-shop-arc" data-tip="Arc Tower — one shot forks through 3 nearby bodies. Slow to wind up, devastating on a packed wave">⚡ Arc <span class="shop-cost" id="vx-arc-cost">260⚡</span></button>
+    <button id="vx-shop-lance" data-tip="Lance Tower — a beam that pierces EVERY zombie lined up in front of it. Slowest tower on the field">🔱 Lance <span class="shop-cost" id="vx-lance-cost">320⚡</span></button>
+    <button id="vx-shop-mine" data-tip="Mine — buried on the approach; the first zombie to step near it takes the whole blast">💣 Mine <span class="shop-cost" id="vx-mine-cost">40⚡</span></button>
+    <button id="vx-shop-slow" data-tip="Slow — every zombie near the Heart crawls for 15 seconds">🧊 Slow <span class="shop-cost" id="vx-slow-cost">80⚡</span></button>
+    <button id="vx-shop-ward" data-tip="Ward — widens the Sanctuary: no zombie may SPAWN inside that circle, so the horde has to walk in past your towers">🛡️ Ward <span class="shop-cost" id="vx-ward-cost">150⚡</span></button>
   </div>
+
+  <div id="vx-tower-tip"></div>
 
   <div id="hud-score" class="hud-panel">
     <div id="vx-sandbox-note">🧪 Sandbox — not saved</div>
@@ -250,7 +258,7 @@
   <div id="hud-hint" class="hud-panel">
     <span class="only-fine">
       Drag — rotate &nbsp;·&nbsp; ⌘/⌥ + drag — pan &nbsp;·&nbsp; Scroll — zoom &nbsp;·&nbsp; WASD / arrows — pan &nbsp;·&nbsp;
-      Click — fire missile &nbsp;·&nbsp; 1-4 — spend upgrade &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
+      Click — fire missile &nbsp;·&nbsp; 1-6 — spend upgrade &nbsp;·&nbsp; Hover a tower — its stats &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; R — new run
     </span>
     <span class="only-coarse">
       Tap — fire (hold to aim) · Drag — rotate · 2 fingers — pan · Pinch — zoom

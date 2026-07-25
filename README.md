@@ -22,9 +22,18 @@ A complete siege-defense game on procedurally generated voxel terrain:
 
 - **The loop** — zombies invade in escalating waves and eat each other to
   evolve; you call down missiles (destructible terrain, permanent craters),
-  build turrets, bury mines and trigger slow-fields to keep the Heart alive.
-- **Kill combos** — chained kills inside a 4-second window multiply every
-  payout, uncapped.
+  raise towers, bury mines and trigger slow-fields to keep the Heart alive.
+- **Four tower types** — 🗼 Bolt (single-target sniping), ❄️ Frost (a chill
+  aura that slows and gnaws at everything inside it), ⚡ Arc (one shot forks
+  through three bodies) and 🔱 Lance (a beam piercing an unbounded line).
+  Hover any tower for its live stat block and coverage ring.
+- **Four zombie breeds** — 🧟 Walkers, plus 🏃 Runners (fast, fragile),
+  🪨 Brutes (slow walls) and 🧪 Spitters (siege the Heart from range). The
+  mix diversifies wave after wave, forever.
+- **The Sanctuary** — nothing spawns on consecrated ground around the Heart,
+  and the 🛡️ Ward buys more of it: you're paying for the horde's walk.
+- **Kill combos** — chained kills inside a rolling window (4s, widened by
+  Legacy ranks) multiply every payout, uncapped.
 - **Boss waves** — every 5th wave lands a crowned colossus with an energy
   bounty; let the horde eat it and its power passes on.
 - **Contracts** — three optional objectives per run paying instant energy
@@ -32,10 +41,12 @@ A complete siege-defense game on procedurally generated voxel terrain:
 - **Modes** — 🏆 Ranked (scored, canonical balance), 📅 Daily Challenge
   (one fixed world per UTC day, per-day scoreboard, play streaks) and
   🧪 Sandbox (every knob unlocked, nothing saved).
-- **Legacy** — permanent cross-run perks bought with shards earned every
-  run: Heart HP, starting energy, blast radius, turret damage, opening
+- **Legacy** — eleven permanent cross-run perks bought with shards earned
+  every run: Heart HP (which also scales every repair, since repairs restore
+  a share of maximum), starting energy, blast radius and damage, tower
+  damage / fire rate / bolt speed, starting Sanctuary, combo window, opening
   minefields, shard gain.
-- **16 achievements**, lifetime stats, and a Steam-ready Electron shell in
+- **23 achievements**, lifetime stats, and a Steam-ready Electron shell in
   `steam/` (see `steam/README.md`).
 
 ## Tab 1 — 🌍 Noise World (how Minecraft-style terrain works)

@@ -229,10 +229,158 @@ test("legacy perk helpers", () => {
   assert.equal(core.freeMines(0), 0);
   assert.equal(core.freeMines(2), 4);
   assert.equal(core.legacyTotalRanks({ heartRank: 2, blastRank: 1, shardRank: 2 }), 5);
-  assert.equal(core.LEGACY_PERKS.length, 7);
+  assert.equal(core.LEGACY_PERKS.length, 11);
   const keys = core.LEGACY_PERKS.map((p) => p.key);
-  assert.equal(new Set(keys).size, 7);
+  assert.equal(new Set(keys).size, 11);
   assert.ok(keys.includes("damageRank")); // Heavy Ordnance: +1 starting blast damage
+  assert.ok(keys.includes("rateRank")); // Rapid Coils: towers fire faster
+  // Every perk must be a key sanitizeLegacy actually preserves, or buying it
+  // would silently evaporate on the next page load.
+  const saved = core.sanitizeLegacy(Object.fromEntries(keys.map((k) => [k, 1])));
+  for (const k of keys) assert.equal(saved[k], 1, k);
+});
+
+/* ---------- towers ---------- */
+
+test("towerCooldown shortens forever without ever reaching zero", () => {
+  assert.equal(core.towerCooldown(0), core.TOWER_BASE_COOLDOWN);
+  assert.equal(core.towerCooldown(4), core.TOWER_BASE_COOLDOWN / 2); // +25%/rank
+  let prev = core.towerCooldown(0);
+  for (let r = 1; r <= 50; r++) {
+    const cd = core.towerCooldown(r);
+    assert.ok(cd < prev, `rank ${r} must fire faster than ${r - 1}`);
+    assert.ok(cd > 0, `rank ${r} cooldown must stay positive`);
+    prev = cd;
+  }
+});
+
+test("tower types are distinct and each maps to a real shop item", () => {
+  const keys = core.TOWER_TYPES.map((t) => t.key);
+  assert.deepEqual(keys, ["bolt", "frost", "arc", "lance"]);
+  for (const t of core.TOWER_TYPES) assert.ok(core.SHOP[t.shop], `${t.key} needs a price`);
+});
+
+test("lance towers pay for their unbounded pierce in cadence and per-body damage", () => {
+  const ranks = 2;
+  assert.ok(core.lanceDamage(ranks) < core.turretDamage(ranks));
+  assert.ok(core.lanceCooldown(ranks) > core.arcCooldown(ranks)); // slowest tower on the field
+  // Single-target DPS must stay the bolt turret's job: a lance that also
+  // won the 1v1 would make every other tower pointless.
+  const boltDps = core.turretDamage(ranks) / core.towerCooldown(ranks);
+  const perBodyDps = core.lanceDamage(ranks) / core.lanceCooldown(ranks);
+  assert.ok(perBodyDps < boltDps);
+  // A lance must pay off once a handful of bodies line up, or nobody would
+  // ever buy the slowest tower on the field. Break-even lands at 4.
+  assert.ok(perBodyDps * 3 < boltDps);
+  assert.ok(perBodyDps * 4 > boltDps);
+  assert.ok(core.LANCE_WIDTH > 0);
+});
+
+test("boltSpeed climbs forever and never stalls a shot", () => {
+  assert.equal(core.boltSpeed(0), core.BOLT_BASE_SPEED);
+  let prev = core.boltSpeed(0);
+  for (let r = 1; r <= 40; r++) {
+    const v = core.boltSpeed(r);
+    assert.ok(v > prev, `rank ${r} must fly faster`);
+    prev = v;
+  }
+});
+
+test("repairs restore a share of max HP, so Reinforced Heart compounds", () => {
+  const weak = core.heartMaxHp(0, "normal"), strong = core.heartMaxHp(10, "normal");
+  assert.ok(core.repairAmount(strong) > core.repairAmount(weak));
+  assert.equal(core.repairAmount(weak), Math.round(weak * core.REPAIR_FRACTION));
+  assert.ok(core.repairAmount(1) >= 1); // never a no-op purchase
+  assert.ok(core.repairAmount(weak) < weak); // never a full heal
+});
+
+test("comboWindow widens with Killing Spree ranks and drives applyCombo", () => {
+  assert.equal(core.comboWindow(0), core.COMBO_WINDOW);
+  assert.equal(core.comboWindow(4), core.COMBO_WINDOW + 2);
+  const s = core.applyCombo({ count: 0, expiresAt: -Infinity }, 1, 100, core.comboWindow(2));
+  assert.equal(s.expiresAt, 100 + core.COMBO_WINDOW + 1);
+  // A kill landing inside the widened window still chains where the base
+  // window would already have dropped it.
+  const late = core.COMBO_WINDOW + 0.5;
+  assert.equal(core.applyCombo(s, 1, 100 + late, core.comboWindow(2)).count, 2);
+  const base = core.applyCombo({ count: 0, expiresAt: -Infinity }, 1, 100);
+  assert.equal(core.applyCombo(base, 1, 100 + late).count, 1); // chain broken
+});
+
+test("arc towers trade per-body damage and cadence for hitting a clump", () => {
+  const ranks = 2;
+  assert.ok(core.arcDamage(ranks) < core.turretDamage(ranks)); // weaker per body
+  assert.ok(core.arcDamage(ranks) * core.ARC_CHAIN > core.turretDamage(ranks)); // stronger per shot
+  assert.ok(core.arcCooldown(ranks) > core.towerCooldown(ranks)); // …but slower
+  const boltDps = core.turretDamage(ranks) / core.towerCooldown(ranks);
+  // Damage-per-second on a single isolated target must still favour a bolt
+  // turret, or the arc tower would be a strict upgrade rather than a choice.
+  assert.ok(core.arcDamage(ranks) / core.arcCooldown(ranks) < boltDps);
+  // …and a FULL fork must beat it, or the arc tower is a strict downgrade
+  // and there is no reason to ever buy one. Both directions matter.
+  const arcFullDps = core.arcDamage(ranks) * core.ARC_CHAIN / core.arcCooldown(ranks);
+  assert.ok(arcFullDps > boltDps, `arc at full chain (${arcFullDps}) must beat bolt (${boltDps})`);
+});
+
+test("frost towers grow with 📡 picks and chip harder with 🎯 picks", () => {
+  assert.ok(core.frostRadius(2) > core.frostRadius(0));
+  assert.ok(core.frostTickDamage(3) > core.frostTickDamage(0));
+  assert.ok(core.FROST_SLOW > 0 && core.FROST_SLOW < 1); // a slow, not a stop
+});
+
+/* ---------- sanctuary ---------- */
+
+test("sanctuaryRadius keeps spawns off the Heart and grows per ward", () => {
+  assert.equal(core.sanctuaryRadius(0), core.SANCTUARY_BASE);
+  assert.ok(core.SANCTUARY_BASE > 0); // unwarded runs still get bare ground
+  let prev = core.sanctuaryRadius(0);
+  for (let r = 1; r <= 10; r++) {
+    const rad = core.sanctuaryRadius(r);
+    assert.equal(rad - prev, core.SANCTUARY_PER_WARD);
+    prev = rad;
+  }
+  // Consecrated Ground stacks on top, and is worth less than an in-run Ward.
+  assert.equal(core.sanctuaryRadius(0, 3), core.SANCTUARY_BASE + 3 * core.SANCTUARY_PER_LEGACY);
+  assert.ok(core.SANCTUARY_PER_LEGACY < core.SANCTUARY_PER_WARD);
+  assert.equal(core.sanctuaryRadius(1, 1), core.SANCTUARY_BASE + core.SANCTUARY_PER_WARD + core.SANCTUARY_PER_LEGACY);
+});
+
+/* ---------- archetypes ---------- */
+
+test("archetypeChance starts at zero and climbs toward 1 without a cap", () => {
+  assert.equal(core.archetypeChance(0), 0);
+  let prev = 0;
+  for (let w = 1; w <= 200; w++) {
+    const p = core.archetypeChance(w);
+    assert.ok(p > prev, `wave ${w} must diversify further than ${w - 1}`);
+    assert.ok(p < 1);
+    prev = p;
+  }
+  assert.ok(core.archetypeChance(1000) > 0.99);
+});
+
+test("rollArchetype: walkers only at wave 0, every breed reachable later", () => {
+  for (let i = 0; i < 50; i++) {
+    assert.equal(core.rollArchetype(0, core.mulberry32(i)).key, "walker");
+  }
+  const seen = new Set();
+  const rand = core.mulberry32(99);
+  for (let i = 0; i < 4000; i++) seen.add(core.rollArchetype(40, rand).key);
+  for (const k of ["walker", ...core.SPECIAL_ARCHETYPES]) assert.ok(seen.has(k), k);
+});
+
+test("archetypes are balanced trade-offs, not strict upgrades", () => {
+  const w = core.ARCHETYPES.walker;
+  assert.equal(w.hp * w.speed * w.dmg * w.reach * w.scale, 1); // the baseline
+  for (const key of core.SPECIAL_ARCHETYPES) {
+    const a = core.ARCHETYPES[key];
+    assert.ok(a.hp > 0 && a.speed > 0 && a.dmg > 0 && a.scale > 0, key);
+    // Each breed must give something up relative to a plain Walker.
+    const stats = [a.hp, a.speed, a.dmg, a.reach];
+    assert.ok(stats.some((v) => v > 1), `${key} must have a strength`);
+    assert.ok(stats.some((v) => v < 1), `${key} must have a weakness`);
+    assert.ok(typeof a.tint === "number", `${key} needs a tell`);
+  }
 });
 
 test("shop costs escalate per purchase", () => {
@@ -339,7 +487,7 @@ test("contractProgress reads the right counter for every kind", () => {
   const counters = {
     ...core.freshRunCounters(),
     kills: 12, wave: 6, maxBlastKills: 4, mineKills: 2, turretKills: 7,
-    maxLevelKilled: 3, maxEnergy: 320,
+    maxLevelKilled: 3, maxEnergy: 320, towersBuilt: 4, wardRank: 2,
   };
   const byKind = (kind, target = 999) => ({ kind, target });
   assert.equal(core.contractProgress(byKind("kills"), counters), 12);
@@ -349,6 +497,8 @@ test("contractProgress reads the right counter for every kind", () => {
   assert.equal(core.contractProgress(byKind("turretKills"), counters), 7);
   assert.equal(core.contractProgress(byKind("maxLevelKilled"), counters), 3);
   assert.equal(core.contractProgress(byKind("maxEnergy"), counters), 320);
+  assert.equal(core.contractProgress(byKind("towersBuilt"), counters), 4);
+  assert.equal(core.contractProgress(byKind("wardRank"), counters), 2);
 });
 
 test("no-repair contract freezes at the wave of the first repair", () => {
@@ -370,6 +520,13 @@ test("every pool kind is handled by contractProgress", () => {
     // counter must move it (except noRepairWave which mixes two counters).
     const before = core.contractProgress({ kind: def.kind, target: 1 }, counters);
     assert.equal(typeof before, "number");
+    // …and the counter it reads must actually be one the run keeps, or the
+    // contract would sit at 0 forever while looking perfectly valid.
+    if (def.kind !== "noRepairWave") {
+      assert.ok(def.kind in counters, `${def.key} reads unknown counter ${def.kind}`);
+      const bumped = { ...counters, [def.kind]: counters[def.kind] + 1 };
+      assert.equal(core.contractProgress({ kind: def.kind, target: 1 }, bumped), before + 1);
+    }
   }
 });
 
@@ -424,11 +581,11 @@ test("daily scores: todayBest resets each day, bestScore is all-time", () => {
 
 /* ---------- achievements & sanitizers ---------- */
 
-test("achievements table has the full 18 with labels", () => {
+test("achievements table has the full 23 with labels", () => {
   const keys = Object.keys(core.ACHIEVEMENTS);
-  assert.equal(keys.length, 18);
+  assert.equal(keys.length, 23);
   for (const k of keys) assert.ok(core.ACHIEVEMENTS[k].startsWith("🏆"));
-  for (const k of ["boss-slayer", "combo-10", "contracts", "streak-3", "kills-1000", "legacy-5", "wave-15", "wave-20", "adapted", "critical-mass"]) {
+  for (const k of ["boss-slayer", "combo-10", "contracts", "streak-3", "kills-1000", "legacy-5", "wave-15", "wave-20", "adapted", "critical-mass", "frostbite", "arclight", "lancer", "sanctuary", "menagerie"]) {
     assert.ok(keys.includes(k), k);
   }
 });

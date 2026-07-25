@@ -283,7 +283,7 @@ let runMaxCombo = 0;
 // one huge blast pays out at its own full chain).
 function registerPlayerKills(kills) {
   const now = performance.now() / 1000;
-  combo = core.applyCombo(combo, kills, now);
+  combo = core.applyCombo(combo, kills, now, core.comboWindow(legacy.comboRank));
   if (combo.count > runMaxCombo) runMaxCombo = combo.count;
   if (combo.count >= 10) unlockAchievement("combo-10");
   if (combo.count >= 2) playComboTick(combo.count);
@@ -301,7 +301,10 @@ function updateComboHud(now) {
   const fill = document.getElementById("vx-combo-fill");
   if (val) val.textContent = `×${combo.count}`;
   if (mult) mult.textContent = `payout ×${core.comboMultiplier(combo.count).toFixed(2)}`;
-  if (fill) fill.style.width = `${Math.max(0, Math.min(1, (combo.expiresAt - now) / core.COMBO_WINDOW)) * 100}%`;
+  // Killing Spree ranks widen the window, so the bar must drain over the
+  // player's ACTUAL window, not the base one.
+  const comboSpan = core.comboWindow(legacy.comboRank);
+  if (fill) fill.style.width = `${Math.max(0, Math.min(1, (combo.expiresAt - now) / comboSpan)) * 100}%`;
 }
 
 /* ---------- per-run counters (feed the contracts system) ---------- */
@@ -345,9 +348,16 @@ function maybeCelebrateNewBest() {
 // and must never decrease, while energy is drained by shop purchases.
 let energy = 0;
 let repairCost = core.SHOP.repair.base, turretCost = core.SHOP.turret.base,
-  mineCost = core.SHOP.mine.base, slowCost = core.SHOP.slow.base;
-let turrets = []; // { x, z, y, group, head, cooldown }
+  frostCost = core.SHOP.frost.base, arcCost = core.SHOP.arc.base,
+  lanceCost = core.SHOP.lance.base,
+  mineCost = core.SHOP.mine.base, slowCost = core.SHOP.slow.base,
+  wardCost = core.SHOP.ward.base;
+let turrets = []; // { kind, x, z, y, group, head, cooldown, aura }
 let turretBolts = []; // { mesh, target }
+// 🛡️ Ward purchases this run — each one consecrates more ground around the
+// Heart that fresh zombies may not spawn on (core.sanctuaryRadius).
+let wardRank = 0;
+let sanctuaryRing = null; // terrain-following outline of the consecrated edge
 let mines = []; // { x, z, mesh }
 let slowUntil = 0; // seconds (performance.now() clock) the Heart slow-field stays active
 let slowDome = null; // translucent dome visual while the field is up
@@ -564,6 +574,9 @@ function spawnMonsters(biome, heights, seed) {
       phase: rand() * Math.PI * 2,
       walkPhase: rand() * Math.PI * 2,
       hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
+      // The idle world that greets the player is plain walkers — breeds are
+      // an escalation the waves bring in (see core.rollArchetype).
+      arch: core.ARCHETYPES.walker, frostTick: 0,
       ...initVerticalState(x, z),
       ...createMonsterUi(),
     });
@@ -574,26 +587,53 @@ function spawnMonsters(biome, heights, seed) {
 
 // Creates one zombie at an exact spot. Shared by random/invasion spawns and
 // by condensation (which re-spawns fused survivors where their cohort stood).
-function spawnZombieAt(x, z, level = 1, isBoss = false) {
+// `arch` defaults to a wave-scaled roll (core.rollArchetype) — pass one
+// explicitly for spawns that shouldn't be breed-diverse (bosses, and the
+// cohorts that come out of a condensation, which are pure mass).
+function spawnZombieAt(x, z, level = 1, isBoss = false, arch = null) {
   const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
+  const breed = arch || (isBoss ? core.ARCHETYPES.walker : core.rollArchetype(waveNumber));
+  tintZombie(mats, breed);
   const rig = createZombieMesh(mats);
   monsterGroup.add(rig.root);
   // Bosses stalk rather than sprint — their level's full stackSpeed would be
   // comical, so it's damped (core.BOSS_SPEED_FACTOR).
   const speed = isBoss
     ? stackSpeed(level) * core.BOSS_SPEED_FACTOR
-    : stackSpeed(level) + Math.random() * 0.2;
-  monsters.push({
-    rig, mats, x, z, isBoss,
+    : (stackSpeed(level) + Math.random() * 0.2) * breed.speed;
+  const m = {
+    rig, mats, x, z, isBoss, arch: breed,
     angle: Math.random() * Math.PI * 2,
     speed,
     timer: Math.random() * 2,
     phase: Math.random() * Math.PI * 2,
     walkPhase: Math.random() * Math.PI * 2,
-    hp: maxHpFor(level), stackLevel: level, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
+    hp: 1, stackLevel: level, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
+    frostTick: 0, // seconds until this body takes its next chill tick
     ...initVerticalState(x, z),
     ...createMonsterUi(),
-  });
+  };
+  m.hp = maxHpFor(m); // breed HP multiplier needs the monster, not just its level
+  monsters.push(m);
+  noteBreedSeen(breed);
+}
+
+// The breed's tell: its tint multiplies the (already textured) skin and
+// clothes materials, so a Brute reads as slate-blue and a Runner as hot
+// orange at any zoom without a second texture set.
+function tintZombie(mats, breed) {
+  if (!breed.tint) return;
+  mats.skin.color.setHex(breed.tint);
+  mats.face.color.setHex(breed.tint);
+  mats.clothes.color.setHex(breed.tint);
+}
+
+// Achievement bookkeeping: meeting all three special breeds in one run.
+let breedsSeen = new Set();
+function noteBreedSeen(breed) {
+  if (breed.key === "walker" || breedsSeen.has(breed.key)) return;
+  breedsSeen.add(breed.key);
+  if (core.SPECIAL_ARCHETYPES.every((k) => breedsSeen.has(k))) unlockAchievement("menagerie");
 }
 
 // Spawns one fresh zombie at a random valid spot — used to replace a killed
@@ -620,10 +660,88 @@ function spawnRandomZombie(atEdge = false, level = 1, isBoss = false) {
       z = 3 + Math.random() * (GRID - 6);
     }
     h = heightAt(x, z);
-    if (h > biome.seaLevel && h < biome.snowLine) break;
+    // Consecrated ground: nothing materializes inside the Sanctuary, so the
+    // horde always has to cross open ground to reach the Heart.
+    if (h > biome.seaLevel && h < biome.snowLine && !insideSanctuary(x, z)) break;
   }
+  // Last resort (a wide Ward can leave few legal tiles): shove the spot
+  // radially out past the Sanctuary edge rather than spawning on the Heart.
+  if (insideSanctuary(x, z)) ({ x, z } = pushOutOfSanctuary(x, z));
   spawnZombieAt(x, z, level, isBoss);
   updateZombieBoard();
+}
+
+/* ---------- the Sanctuary: no-spawn ground around the Heart ---------- */
+
+function sanctuaryRadius() { return core.sanctuaryRadius(wardRank, legacy.groundRank); }
+
+function insideSanctuary(x, z) {
+  if (!heart) return false;
+  return Math.hypot(x - heart.x, z - heart.z) < sanctuaryRadius();
+}
+
+// Slides (x,z) straight out to the Sanctuary edge, then clamps it back
+// inside the map — on a fully-consecrated map the horde ends up trickling in
+// from the corners, which is a fair consequence of paying for that much Ward.
+function pushOutOfSanctuary(x, z) {
+  const dx = x - heart.x, dz = z - heart.z;
+  const d = Math.hypot(dx, dz) || 1;
+  const r = sanctuaryRadius() + 0.5;
+  const ux = d > 0.001 ? dx / d : Math.sin(Math.random() * Math.PI * 2);
+  const uz = d > 0.001 ? dz / d : Math.cos(Math.random() * Math.PI * 2);
+  return {
+    x: Math.max(3, Math.min(GRID - 3, heart.x + ux * r)),
+    z: Math.max(3, Math.min(GRID - 3, heart.z + uz * r)),
+  };
+}
+
+// A dotted outline of the consecrated edge, sampled onto the terrain so it
+// hugs hills instead of slicing through them. Rebuilt whenever the radius or
+// the ground changes; hidden entirely on the title screen's idle world.
+function rebuildSanctuaryRing() {
+  clearSanctuaryRing();
+  if (!heart) return;
+  const r = sanctuaryRadius();
+  const pts = [];
+  const steps = 128;
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    const x = heart.x + Math.sin(a) * r;
+    const z = heart.z + Math.cos(a) * r;
+    pts.push(new THREE.Vector3(x, heightAt(x, z) + 0.62, z));
+  }
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineDashedMaterial({
+    color: wardRank > 0 ? 0xffd782 : 0x7fd6ff, dashSize: 0.7, gapSize: 0.5,
+    transparent: true, opacity: wardRank > 0 ? 0.75 : 0.4, depthWrite: false,
+  });
+  sanctuaryRing = new THREE.Line(geo, mat);
+  sanctuaryRing.computeLineDistances(); // dashes need per-vertex arc length
+  root.add(sanctuaryRing);
+}
+
+// Blasts chew the ground the ring is drawn on, so its heights are re-sampled
+// on a slow timer (twice a second) rather than rebuilt — mutating the
+// existing buffer keeps this off the allocation path entirely.
+let sanctuaryRingTimer = 0;
+function refreshSanctuaryRingHeights(dt) {
+  if (!sanctuaryRing) return;
+  sanctuaryRingTimer -= dt;
+  if (sanctuaryRingTimer > 0) return;
+  sanctuaryRingTimer = 0.5;
+  const pos = sanctuaryRing.geometry.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, heightAt(pos.getX(i), pos.getZ(i)) + 0.62);
+  }
+  pos.needsUpdate = true;
+}
+
+function clearSanctuaryRing() {
+  if (!sanctuaryRing) return;
+  root.remove(sanctuaryRing);
+  sanctuaryRing.geometry.dispose();
+  sanctuaryRing.material.dispose();
+  sanctuaryRing = null;
 }
 
 /* ---------- condensation: 200 of a level fuse into 100 of the next ---------- */
@@ -665,7 +783,8 @@ function checkCondensation() {
     // frame budget (cosmetic thinning only, the spawns themselves are exact).
     for (let i = 0; i < survivors; i++) {
       const src = group[Math.min(group.length - 1, i * 2)];
-      spawnZombieAt(src.x, src.z, level + 1);
+      // A fusion melts breeds together — what rises is undifferentiated mass.
+      spawnZombieAt(src.x, src.z, level + 1, false, core.ARCHETYPES.walker);
       if (i < 20) spawnEatFx(src.x, heightAt(src.x, src.z) + 1, src.z);
     }
     // Newborns pulse so the fusion reads as an event, not a glitch.
@@ -955,6 +1074,9 @@ function resetRun() {
   minSpawnLevel = 1; // condensation ratchet starts over
   turretDamageUps = 0;
   turretRangeUps = 0;
+  turretRateUps = 0;
+  boltSpeedUps = 0;
+  breedsSeen = new Set();
   maxUnlockedBlast = STARTING_MAX_BLAST + legacy.blastRank; // Demolitionist legacy perk
   blastDamage = core.STARTING_BLAST_DAMAGE + legacy.damageRank; // Heavy Ordnance legacy perk
   upgradesEarned = 0;
@@ -986,8 +1108,14 @@ function resetRun() {
   energy = legacy.energyRank * 40; // Head Start legacy perk
   repairCost = core.SHOP.repair.base;
   turretCost = core.SHOP.turret.base;
+  frostCost = core.SHOP.frost.base;
+  arcCost = core.SHOP.arc.base;
+  lanceCost = core.SHOP.lance.base;
   mineCost = core.SHOP.mine.base;
   slowCost = core.SHOP.slow.base;
+  wardCost = core.SHOP.ward.base;
+  wardRank = 0;
+  rebuildSanctuaryRing();
   document.getElementById("vx-gameover")?.classList.remove("show");
   document.getElementById("vx-paused")?.classList.remove("show");
   updateHeartHud();
@@ -1008,8 +1136,12 @@ function updateShopHud() {
   };
   setBtn("vx-shop-repair", "vx-repair-cost", repairCost, !heart || heart.hp >= heartMaxHp());
   setBtn("vx-shop-turret", "vx-turret-cost", turretCost);
+  setBtn("vx-shop-frost", "vx-frost-cost", frostCost);
+  setBtn("vx-shop-arc", "vx-arc-cost", arcCost);
+  setBtn("vx-shop-lance", "vx-lance-cost", lanceCost);
   setBtn("vx-shop-mine", "vx-mine-cost", mineCost);
   setBtn("vx-shop-slow", "vx-slow-cost", slowCost, performance.now() / 1000 < slowUntil);
+  setBtn("vx-shop-ward", "vx-ward-cost", wardCost);
 }
 
 function buyRepair() {
@@ -1021,7 +1153,8 @@ function buyRepair() {
     runCounters.waveAtFirstRepair = waveNumber;
     renderContracts();
   }
-  heart.hp = Math.min(heartMaxHp(), heart.hp + 30);
+  // A share of MAX HP, so Reinforced Heart ranks make repairs bigger too.
+  heart.hp = Math.min(heartMaxHp(), heart.hp + core.repairAmount(heartMaxHp()));
   playPurchase();
   spawnEatFx(heart.x, heart.y + 1.2, heart.z); // reuse the flash/ring as a "heal burst"
   updateHeartHud();
@@ -1032,9 +1165,59 @@ function buyTurret() {
   if (gameState !== "playing" || energy < turretCost) return;
   energy -= turretCost;
   turretCost = core.nextShopCost(turretCost, "turret");
-  buildTurret();
+  buildTurret("bolt");
   if (turrets.length >= 3) unlockAchievement("engineer");
   playPurchase();
+  updateScoreHud();
+}
+
+function buyFrostTower() {
+  if (gameState !== "playing" || energy < frostCost) return;
+  energy -= frostCost;
+  frostCost = core.nextShopCost(frostCost, "frost");
+  buildTurret("frost");
+  unlockAchievement("frostbite");
+  if (turrets.length >= 3) unlockAchievement("engineer");
+  playPurchase();
+  updateScoreHud();
+}
+
+function buyArcTower() {
+  if (gameState !== "playing" || energy < arcCost) return;
+  energy -= arcCost;
+  arcCost = core.nextShopCost(arcCost, "arc");
+  buildTurret("arc");
+  unlockAchievement("arclight");
+  if (turrets.length >= 3) unlockAchievement("engineer");
+  playPurchase();
+  updateScoreHud();
+}
+
+function buyLanceTower() {
+  if (gameState !== "playing" || energy < lanceCost) return;
+  energy -= lanceCost;
+  lanceCost = core.nextShopCost(lanceCost, "lance");
+  buildTurret("lance");
+  unlockAchievement("lancer");
+  if (turrets.length >= 3) unlockAchievement("engineer");
+  playPurchase();
+  updateScoreHud();
+}
+
+// 🛡️ Ward: consecrate more ground. Doesn't touch anything already on the
+// field — it buys the horde's WALK, not a wall, so the payoff is the extra
+// seconds your towers get on everything that spawns from now on.
+function buyWard() {
+  if (gameState !== "playing" || energy < wardCost) return;
+  energy -= wardCost;
+  wardCost = core.nextShopCost(wardCost, "ward");
+  wardRank++;
+  runCounters.wardRank = wardRank;
+  if (wardRank >= 3) unlockAchievement("sanctuary");
+  rebuildSanctuaryRing();
+  checkContracts();
+  playPurchase();
+  showToast(`🛡️ Sanctuary widened to ${sanctuaryRadius()} blocks — nothing spawns inside it`);
   updateScoreHud();
 }
 
@@ -1067,10 +1250,17 @@ function buySlow() {
   updateScoreHud();
 }
 
-// Whether a zombie at (x,z) is currently inside an active Heart slow-field.
-function isSlowed(x, z) {
-  if (!heart || performance.now() / 1000 >= slowUntil) return false;
-  return Math.hypot(x - heart.x, z - heart.z) < SLOW_RADIUS;
+// Whether a zombie at (x,z) is currently being slowed — by the purchased
+// Heart slow-field, or by standing in any frost tower's aura. Returns the
+// speed multiplier so the two sources can't silently stack to a standstill:
+// the stronger one wins.
+function slowFactorAt(x, z) {
+  let factor = 1;
+  if (heart && performance.now() / 1000 < slowUntil && Math.hypot(x - heart.x, z - heart.z) < SLOW_RADIUS) {
+    factor = Math.min(factor, SLOW_FACTOR);
+  }
+  if (inFrostAura(x, z)) factor = Math.min(factor, core.FROST_SLOW);
+  return factor;
 }
 
 /* ---------- mines: buried one-shot area denial ---------- */
@@ -1127,47 +1317,130 @@ function updateMines() {
   }
 }
 
-/* ---------- turrets: automated defense ---------- */
+/* ---------- towers: automated defense, four flavours ---------- */
+// One ring, four answers to being overrun (core.TOWER_TYPES):
+//   🗼 bolt  — single-target sniping, the reliable backbone
+//   ❄️ frost — no bolts at all: a chill aura that slows AND ticks damage on
+//              everything standing in it, which is what actually saves you
+//              when the horde arrives faster than it can be shot one by one
+//   ⚡ arc   — a forked shot that jumps through a clump; winds up slowly, so
+//              it's wasted on stragglers and devastating on a packed wave
+//   🔱 lance — a beam that pierces an unbounded line of bodies, for when the
+//              horde files in along one approach; slowest cadence on the field
+// All four run off the same four upgrade tracks (🎯 damage, 📡 range,
+// ⏩ fire rate, 🚀 bolt speed), so no upgrade pick is ever dead.
 
-const TURRET_COOLDOWN = 0.8;
 // In-run ⭐ picks (reset each run): 🎯 shares the Legacy +0.5/rank damage
-// scale, 📡 stretches the targeting radius by 2 blocks per pick.
-let turretDamageUps = 0, turretRangeUps = 0;
-// Flat, ignores zombie armor — turrets are tech, like blasts. Overcharged
+// scale, 📡 stretches range by 2 blocks (and frost auras by 1.5), ⏩ shares
+// the Legacy Rapid Coils fire-rate scale.
+let turretDamageUps = 0, turretRangeUps = 0, turretRateUps = 0, boltSpeedUps = 0;
+// Flat, ignores zombie armor — towers are tech, like blasts. Overcharged
 // Turrets legacy ranks and in-run 🎯 picks both raise it.
-function turretDmg() { return core.turretDamage(legacy.turretRank + turretDamageUps); }
+function turretRanks() { return legacy.turretRank + turretDamageUps; }
+function rateRanks() { return legacy.rateRank + turretRateUps; }
+function turretDmg() { return core.turretDamage(turretRanks()); }
 function turretRange() { return core.turretRange(turretRangeUps); }
+function turretCooldown() { return core.towerCooldown(rateRanks()); }
+function boltRanks() { return legacy.boltRank + boltSpeedUps; }
+function boltSpeed() { return core.boltSpeed(boltRanks()); }
+// Shots per second across every standing tower — the number the ⏩ pick
+// actually moves, shown in the chooser so the trade-off is legible.
+function towerRateReadout(extraRate = 0) {
+  return (1 / core.towerCooldown(rateRanks() + extraRate)).toFixed(2);
+}
 
-// Each new turret takes the next slot on a ring around the Heart (golden-
+const TOWER_LOOK = {
+  bolt: { post: 0x4a5a68, head: 0x77e0a8, emissive: 0x1c4a30, bolt: 0x7fffd0 },
+  frost: { post: 0x3d5566, head: 0x8fe6ff, emissive: 0x1d4a5e, bolt: 0xa8ecff },
+  arc: { post: 0x584a68, head: 0xc79bff, emissive: 0x3a1c58, bolt: 0xd9b3ff },
+  lance: { post: 0x684a4a, head: 0xffb066, emissive: 0x5a2a10, bolt: 0xffd0a0 },
+};
+
+// Each new tower takes the next slot on a ring around the Heart (golden-
 // angle spacing so any count spreads evenly without overlapping).
-function buildTurret() {
+function buildTurret(kind = "bolt") {
   const idx = turrets.length;
   const angle = idx * 2.399963; // golden angle in radians
   const ringR = 3.2 + (idx % 3) * 0.8;
   const x = heart.x + Math.sin(angle) * ringR;
   const z = heart.z + Math.cos(angle) * ringR;
   const y = heightAt(x, z) + 0.5;
+  const look = TOWER_LOOK[kind];
 
   const group = new THREE.Group();
   const post = new THREE.Mesh(
     new THREE.CylinderGeometry(0.16, 0.22, 1.1, 6),
-    new THREE.MeshLambertMaterial({ color: 0x4a5a68 })
+    new THREE.MeshLambertMaterial({ color: look.post })
   );
   post.position.y = 0.55;
   group.add(post);
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.42, 0.3, 0.42),
-    new THREE.MeshLambertMaterial({ color: 0x77e0a8, emissive: 0x1c4a30 })
-  );
+  // Silhouette per type, readable from the default camera height: the bolt
+  // turret keeps its blocky head, frost wears an octahedral shard, arc an
+  // emitter ring, lance a long barrel you can see aiming.
+  let head;
+  if (kind === "frost") {
+    head = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.32),
+      new THREE.MeshLambertMaterial({ color: look.head, emissive: look.emissive })
+    );
+  } else if (kind === "arc") {
+    head = new THREE.Mesh(
+      new THREE.TorusGeometry(0.26, 0.07, 6, 12),
+      new THREE.MeshLambertMaterial({ color: look.head, emissive: look.emissive })
+    );
+    head.rotation.x = Math.PI / 2;
+  } else if (kind === "lance") {
+    // A long barrel: which way a lance is pointing IS its stat line, so the
+    // silhouette has to read as a direction from across the map.
+    head = new THREE.Group();
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1, 0.13, 1.15, 6),
+      new THREE.MeshLambertMaterial({ color: look.head, emissive: look.emissive })
+    );
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = 0.42;
+    head.add(barrel);
+  } else {
+    head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.3, 0.42),
+      new THREE.MeshLambertMaterial({ color: look.head, emissive: look.emissive })
+    );
+  }
   head.position.y = 1.2;
   group.add(head);
+
+  // Frost towers wear their reach: a translucent dome showing exactly which
+  // ground is chilled, so placement is a decision rather than a guess.
+  let aura = null;
+  if (kind === "frost") {
+    aura = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshBasicMaterial({
+        color: 0x8fe6ff, transparent: true, opacity: 0.09,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      })
+    );
+    aura.position.y = -0.4;
+    // The dome is scenery, not a hitbox: without this the inspector would
+    // fire whenever the cursor sat anywhere inside a frost tower's radius.
+    aura.raycast = () => {};
+    group.add(aura);
+  }
+
   group.position.set(x, y, z);
   root.add(group);
 
-  turrets.push({ x, z, y, group, head, cooldown: 0 });
+  turrets.push({ kind, x, z, y, group, head, aura, cooldown: 0, spin: 0 });
+  runCounters.towersBuilt++;
+  checkContracts();
+  updateZombieBoard(); // the roster panel lists standing towers too
 }
 
 function clearTurrets() {
+  // The inspector must not keep pointing at a tower that no longer exists.
+  hoveredTower = null;
+  clearTowerRangeRing();
+  document.getElementById("vx-tower-tip")?.classList.remove("show");
   for (const t of turrets) {
     root.remove(t.group);
     t.group.traverse((o) => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
@@ -1181,7 +1454,11 @@ function clearTurrets() {
   turretBolts = [];
 }
 
-// Re-seat turrets on new ground after a keep-zombies terrain regen.
+function towerCount(kind) {
+  return turrets.reduce((n, t) => n + (t.kind === kind ? 1 : 0), 0);
+}
+
+// Re-seat towers on new ground after a keep-zombies terrain regen.
 function reseatTurrets() {
   for (const t of turrets) {
     t.y = heightAt(t.x, t.z) + 0.5;
@@ -1189,9 +1466,23 @@ function reseatTurrets() {
   }
 }
 
+// True while any frost tower is chilling this spot — folded into slowFactorAt
+// so movement code has one question to ask.
+function inFrostAura(x, z) {
+  const r = core.frostRadius(turretRangeUps);
+  for (const t of turrets) {
+    if (t.kind !== "frost") continue;
+    if (Math.hypot(x - t.x, z - t.z) < r) return true;
+  }
+  return false;
+}
+
 function updateTurrets(dt) {
+  const frostR = core.frostRadius(turretRangeUps);
   for (const t of turrets) {
     t.cooldown -= dt;
+    if (t.kind === "frost") { updateFrostTower(t, dt, frostR); continue; }
+
     // Track + shoot the nearest zombie in range.
     let best = null, bestD = turretRange();
     for (const m of monsters) {
@@ -1201,20 +1492,120 @@ function updateTurrets(dt) {
     if (!best) continue;
     t.head.rotation.y = Math.atan2(best.x - t.x, best.z - t.z);
     if (t.cooldown > 0) continue;
-    t.cooldown = TURRET_COOLDOWN;
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 6, 5),
-      new THREE.MeshBasicMaterial({
-        color: 0x7fffd0, transparent: true, opacity: 0.95,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      })
-    );
-    mesh.position.set(t.x, t.y + 1.2, t.z);
-    root.add(mesh);
-    turretBolts.push({ mesh, target: best });
+
+    if (t.kind === "arc") {
+      t.cooldown = core.arcCooldown(rateRanks());
+      fireArc(t, best);
+    } else if (t.kind === "lance") {
+      t.cooldown = core.lanceCooldown(rateRanks());
+      fireLance(t, best);
+    } else {
+      t.cooldown = turretCooldown();
+      spawnBolt(t, best, turretDmg());
+    }
     playTurretShot();
   }
 
+  updateTurretBolts(dt);
+}
+
+// Frost towers never fire: they hold a chill field that slows everything
+// inside (see slowFactorAt) and gnaws at it on a fixed tick, so a wall of bodies
+// walking through takes damage no single-target turret could keep up with.
+function updateFrostTower(t, dt, frostR) {
+  t.spin += dt * 1.4;
+  t.head.rotation.y = t.spin;
+  if (t.aura) t.aura.scale.setScalar(frostR);
+  if (t.cooldown > 0) return;
+  t.cooldown = core.FROST_TICK;
+  const dmg = core.frostTickDamage(turretRanks());
+  for (let i = monsters.length - 1; i >= 0; i--) {
+    const m = monsters[i];
+    if (Math.hypot(m.x - t.x, m.z - t.z) > frostR) continue;
+    m.hp -= dmg;
+    if (m.hp <= 0) killZombieByPlayer(m, "turret");
+  }
+}
+
+// Arc towers fork: the shot walks from the primary target to the nearest
+// unhit body, up to core.ARC_CHAIN links, each link a shorter bolt. Cheap
+// enough to run every shot — the chain is at most 3 nearest-neighbour scans.
+function fireArc(t, first) {
+  const hit = new Set([first]);
+  let from = first;
+  spawnBolt(t, first, core.arcDamage(turretRanks()));
+  for (let link = 1; link < core.ARC_CHAIN; link++) {
+    let next = null, bestD = core.ARC_JUMP;
+    for (const m of monsters) {
+      if (hit.has(m)) continue;
+      const d = Math.hypot(m.x - from.x, m.z - from.z);
+      if (d < bestD) { next = m; bestD = d; }
+    }
+    if (!next) break;
+    hit.add(next);
+    spawnBolt(t, next, core.arcDamage(turretRanks()), from);
+    from = next;
+  }
+}
+
+// Lance towers fire a piercing beam down the line to their target: EVERY
+// zombie within core.LANCE_WIDTH of that line takes the hit, however many
+// that is — the pierce is deliberately unbounded. What it costs is position
+// and time: only bodies that happen to be lined up get hit, and the tower
+// then spends three bolt-turret cooldowns winding the next shot up.
+function fireLance(t, target) {
+  const dx = target.x - t.x, dz = target.z - t.z;
+  const len = Math.hypot(dx, dz) || 1;
+  const ux = dx / len, uz = dz / len;
+  const reach = turretRange();
+  const dmg = core.lanceDamage(turretRanks());
+  spawnLanceBeam(t, ux, uz, reach);
+  // Iterate backwards: a killed body is spliced out of `monsters` in place.
+  for (let i = monsters.length - 1; i >= 0; i--) {
+    const m = monsters[i];
+    const rx = m.x - t.x, rz = m.z - t.z;
+    const along = rx * ux + rz * uz;              // distance down the beam
+    if (along < 0 || along > reach) continue;      // behind the tower / past its reach
+    const off = Math.abs(rx * uz - rz * ux);       // perpendicular distance
+    if (off > core.LANCE_WIDTH) continue;
+    m.hp -= dmg;
+    if (m.hp <= 0) killZombieByPlayer(m, "turret");
+  }
+}
+
+// The beam itself: a stretched additive box that fades out over ~0.25s, so
+// the player can see exactly what line the shot swept.
+function spawnLanceBeam(t, ux, uz, reach) {
+  const geo = new THREE.BoxGeometry(core.LANCE_WIDTH * 2, 0.18, reach);
+  const mat = new THREE.MeshBasicMaterial({
+    color: TOWER_LOOK.lance.bolt, transparent: true, opacity: 0.75,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const beam = new THREE.Mesh(geo, mat);
+  beam.position.set(t.x + ux * reach * 0.5, t.y + 1.2, t.z + uz * reach * 0.5);
+  beam.rotation.y = Math.atan2(ux, uz);
+  root.add(beam);
+  fx.push({ type: "beam", obj: beam, age: 0, life: 0.25 });
+}
+
+// One travelling projectile. `origin` lets an arc link launch from the last
+// body it struck instead of from the tower head.
+function spawnBolt(t, target, damage, origin = null) {
+  const look = TOWER_LOOK[t.kind];
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(t.kind === "arc" ? 0.11 : 0.09, 6, 5),
+    new THREE.MeshBasicMaterial({
+      color: look.bolt, transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
+  if (origin) mesh.position.set(origin.x, origin.visualY + 0.9 * bodyScale(origin), origin.z);
+  else mesh.position.set(t.x, t.y + 1.2, t.z);
+  root.add(mesh);
+  turretBolts.push({ mesh, target, damage });
+}
+
+function updateTurretBolts(dt) {
   for (let i = turretBolts.length - 1; i >= 0; i--) {
     const b = turretBolts[i];
     if (!monsters.includes(b.target)) {
@@ -1224,12 +1615,12 @@ function updateTurrets(dt) {
       turretBolts.splice(i, 1);
       continue;
     }
-    const ty = b.target.visualY + 0.9 * stackScale(b.target.stackLevel);
+    const ty = b.target.visualY + 0.9 * bodyScale(b.target);
     const dx = b.target.x - b.mesh.position.x, dy = ty - b.mesh.position.y, dz = b.target.z - b.mesh.position.z;
     const dist = Math.hypot(dx, dy, dz);
-    const step = 30 * dt;
+    const step = boltSpeed() * dt;
     if (dist <= Math.max(0.25, step)) {
-      b.target.hp -= turretDmg();
+      b.target.hp -= b.damage;
       root.remove(b.mesh);
       b.mesh.geometry.dispose();
       b.mesh.material.dispose();
@@ -1312,7 +1703,7 @@ const TWEAK_SLIDERS = [
   { id: "vx-sim-speed", def: core.CANONICAL_TWEAKS.simSpeed, fmt: (v) => v.toFixed(1), apply: (v) => { simSpeed = v; } },
   { id: "vx-hp-per-level", def: core.CANONICAL_TWEAKS.hpPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => {
       hpPerLevel = v;
-      for (const m of monsters) m.hp = maxHpFor(m.stackLevel); // heal all to the new full
+      for (const m of monsters) m.hp = maxHpFor(m); // heal all to the new full
     } },
   { id: "vx-dmg-per-level", def: core.CANONICAL_TWEAKS.dmgPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => { dmgPerLevel = v; } },
   { id: "vx-atk-per-level", def: core.CANONICAL_TWEAKS.atkPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => { atkPerLevel = v; } },
@@ -1352,18 +1743,26 @@ function applyMode() {
 // call site stays unchanged. Blast damage vs zombies is the player's
 // blastDamage stat (see killMonstersNear) — raising hpPerLevel or landing a
 // Thick Hide mutation makes high levels harder for the PLAYER to kill too.
-function maxHpFor(level) { return core.maxHpFor(level, hpPerLevel) * mut.hpMul; }
+// Per-MONSTER, not per-level: a zombie's breed (core.ARCHETYPES) multiplies
+// its durability on top of the level curve, so a Brute is a wall and a
+// Runner is paper at the very same level.
+function maxHpFor(m) { return core.maxHpFor(m.stackLevel, hpPerLevel) * mut.hpMul * (m.arch?.hp ?? 1); }
 function dpsFor(level) { return core.dpsFor(level, dmgPerLevel) * mut.dmgMul; }
 const defenseFor = core.defenseFor;
 function stackSpeed(level) { return core.stackSpeed(level, speedPerLevel) * mut.speedMul; }
 const eatsNeededForLevel = core.eatsNeededForLevel;
+
+// Rendered body size: the level curve times the breed's build. Visual only —
+// it deliberately never feeds blast radii or targeting, so what you aim at
+// is what you hit.
+function bodyScale(m) { return stackScale(m.stackLevel) * (m.arch?.scale ?? 1); }
 
 const HP_BAR_W = 0.9, HP_BAR_H = 0.13;
 const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
 
 // How far above a zombie's feet its health bar / aura should float, scaled
 // to how tall that particular stack level actually renders.
-function hpBarOffset(level) { return 1.95 * stackScale(level) + 0.35; }
+function hpBarOffset(m) { return 1.95 * bodyScale(m) + 0.35; }
 
 // Soft white radial-gradient texture, built once and shared (tinted per
 // instance via SpriteMaterial.color) by the health bar and elite-marker glow.
@@ -1433,7 +1832,7 @@ function updateZombieCombat(dt) {
     const a = monsters[i];
     for (let j = i + 1; j < monsters.length; j++) {
       const b = monsters[j];
-      const reach = EAT_DIST * 1.6 * (stackScale(a.stackLevel) + stackScale(b.stackLevel)) / 2;
+      const reach = EAT_DIST * 1.6 * (bodyScale(a) + bodyScale(b)) / 2;
       if (Math.hypot(a.x - b.x, a.z - b.z) >= reach) continue;
       if (!a.fightTarget) a.fightTarget = b;
       if (!b.fightTarget) b.fightTarget = a;
@@ -1445,7 +1844,7 @@ function updateZombieCombat(dt) {
   if (heart && gameState === "playing") {
     for (const m of monsters) {
       if (m.fightTarget) continue;
-      const reach = EAT_DIST * 2.4 * stackScale(m.stackLevel) * mut.reachMul;
+      const reach = EAT_DIST * 2.4 * bodyScale(m) * mut.reachMul * (m.arch?.reach ?? 1);
       if (Math.hypot(m.x - heart.x, m.z - heart.z) < reach) m.fightTarget = heart;
     }
   }
@@ -1474,14 +1873,14 @@ function fireZombieProjectile(shooter, target) {
     blending: THREE.AdditiveBlending, depthWrite: false,
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(shooter.x, shooter.visualY + 1.2 * stackScale(level), shooter.z);
+  mesh.position.set(shooter.x, shooter.visualY + 1.2 * bodyScale(shooter), shooter.z);
   root.add(mesh);
   zombieProjectiles.push({
     mesh, shooter, target,
     // Raw DPS + this shot's interval, kept separate so the target's defense
     // (a DPS-denominated stat) can be subtracted at hit time — see
     // updateZombieProjectiles.
-    dps: dpsFor(level),
+    dps: dpsFor(level) * (shooter.arch?.dmg ?? 1),
     interval: attackInterval(level),
     speed: 40, // super fast — reads as a shot, not a lobbed balloon
   });
@@ -1500,7 +1899,7 @@ function updateZombieProjectiles(dt) {
       zombieProjectiles.splice(i, 1);
       continue;
     }
-    const tx = p.target.x, ty = p.target.visualY + 0.9 * stackScale(p.target.stackLevel), tz = p.target.z;
+    const tx = p.target.x, ty = p.target.visualY + 0.9 * bodyScale(p.target), tz = p.target.z;
     const dx = tx - p.mesh.position.x, dy = ty - p.mesh.position.y, dz = tz - p.mesh.position.z;
     const dist = Math.hypot(dx, dy, dz);
     const step = p.speed * dt;
@@ -1571,8 +1970,9 @@ function resolveZombieKill(killer, loser) {
   while (killer.eatXp >= eatsNeededForLevel(killer.stackLevel)) {
     killer.eatXp -= eatsNeededForLevel(killer.stackLevel);
     killer.stackLevel++;
-    killer.hp = maxHpFor(killer.stackLevel); // leveling up fully heals
-    killer.speed = stackSpeed(killer.stackLevel) + Math.random() * 0.2;
+    killer.hp = maxHpFor(killer); // leveling up fully heals
+    // A breed is for life: a Runner that eats its way up is a faster level 9.
+    killer.speed = (stackSpeed(killer.stackLevel) + Math.random() * 0.2) * (killer.arch?.speed ?? 1);
   }
   if (killer.stackLevel >= 5) unlockAchievement("evolved-5");
   if (killer.stackLevel >= 10) unlockAchievement("evolved-10");
@@ -1617,12 +2017,52 @@ function updateZombieBoard() {
     ? `<div class="hud-board-row hud-board-floor"><span>⬆ Spawn floor</span><span>Lv ${minSpawnLevel}</span></div>`
     : "";
   if (levels.length === 0) {
-    el.innerHTML = `${floorRow}<div class="hud-board-empty">No zombies left</div>`;
+    el.innerHTML = `${floorRow}${breedRows()}${towerRows()}<div class="hud-board-empty">No zombies left</div>`;
     return;
   }
   el.innerHTML = floorRow + levels
     .map((lv) => `<div class="hud-board-row"><span>Lvl ${lv}</span><span>${counts.get(lv)}</span></div>`)
+    .join("") + breedRows() + towerRows();
+}
+
+// Which breeds are on the field right now, with what each one actually does
+// — the tints alone don't say that a Brute is 2.6× tougher.
+function breedRows() {
+  const counts = new Map();
+  for (const m of monsters) {
+    if (m.arch && m.arch.key !== "walker") counts.set(m.arch, (counts.get(m.arch) || 0) + 1);
+  }
+  if (counts.size === 0) return "";
+  const rows = [...counts.entries()]
+    .map(([a, n]) => `<div class="hud-board-row"><span>${a.icon} ${a.name}</span><span>${n}</span></div>
+      <div class="hud-board-note">${breedTip(a)}</div>`)
     .join("");
+  return `<div class="hud-board-head">Breeds afield</div>${rows}`;
+}
+
+// Human-readable stat line for a breed, built from its own multipliers so it
+// can never drift out of sync with core.ARCHETYPES.
+function breedTip(a) {
+  const parts = [];
+  const pct = (v) => `${v > 1 ? "+" : "−"}${Math.round(Math.abs(v - 1) * 100)}%`;
+  if (a.hp !== 1) parts.push(`${pct(a.hp)} HP`);
+  if (a.speed !== 1) parts.push(`${pct(a.speed)} speed`);
+  if (a.dmg !== 1) parts.push(`${pct(a.dmg)} damage`);
+  if (a.reach !== 1) parts.push(`${pct(a.reach)} siege reach`);
+  return parts.join(", ");
+}
+
+// The tower line-up, so the shop's escalating prices are decisions made with
+// the current roster in view.
+function towerRows() {
+  if (turrets.length === 0) return "";
+  const rows = core.TOWER_TYPES
+    .map((def) => [def, towerCount(def.key)])
+    .filter(([, n]) => n > 0)
+    .map(([def, n]) => `<div class="hud-board-row"><span>${def.icon} ${def.name}</span><span>${n}</span></div>
+      <div class="hud-board-note">${def.desc}</div>`)
+    .join("");
+  return `<div class="hud-board-head">Towers standing</div>${rows}`;
 }
 
 // XP thresholds bank upgrade POINTS (no ceiling — the cost gaps grow
@@ -1660,6 +2100,10 @@ function updateUpgradeChooser() {
   if (tdVal) tdVal.textContent = `${turretDmg()} → ${turretDmg() + 0.5}`;
   const trVal = document.getElementById("vx-up-turretrange-val");
   if (trVal) trVal.textContent = `${turretRange()} → ${turretRange() + 2}`;
+  const trateVal = document.getElementById("vx-up-turretrate-val");
+  if (trateVal) trateVal.textContent = `${towerRateReadout()} → ${towerRateReadout(1)}/s`;
+  const bsVal = document.getElementById("vx-up-boltspeed-val");
+  if (bsVal) bsVal.textContent = `${Math.round(boltSpeed())} → ${Math.round(core.boltSpeed(boltRanks() + 1))}`;
 }
 
 function chooseUpgrade(kind) {
@@ -1673,7 +2117,13 @@ function chooseUpgrade(kind) {
     showToast(`🎯 Turret damage ${turretDmg()} — every bolt hits harder!`);
   } else if (kind === "turretrange") {
     turretRangeUps++;
-    showToast(`📡 Turret range ${turretRange()} — bolts reach further out!`);
+    showToast(`📡 Turret range ${turretRange()} — bolts reach further out, frost auras widen!`);
+  } else if (kind === "turretrate") {
+    turretRateUps++;
+    showToast(`⏩ Towers fire ${towerRateReadout()}/s — every tower winds up faster!`);
+  } else if (kind === "boltspeed") {
+    boltSpeedUps++;
+    showToast(`🚀 Bolt speed ${Math.round(boltSpeed())} — shots stop losing races with Runners!`);
   } else {
     blastDamage++;
     showToast(`⚔️ Blast damage ${blastDamage} — deeper craters, harder hits!`);
@@ -1766,9 +2216,20 @@ function renderMutationChips() {
     s.n++;
     stacks.set(def.key, s);
   }
+  // Each chip carries its own explanation: a styled hover card on desktop
+  // (data-tip, see voxel.css) and a tap-for-a-toast on phones, where a
+  // native `title` never fires. The banner is long gone by the time a player
+  // wonders what 🦑 did to the horde — this is where they find out.
   el.innerHTML = [...stacks.values()]
-    .map(({ def, n }) => `<span class="mut-chip" title="${def.name}${n > 1 ? ` ×${n}` : ""} — ${def.desc}">${def.icon}${n > 1 ? `×${n}` : ""}</span>`)
+    .map(({ def, n }) => {
+      const stack = n > 1 ? ` ×${n}` : "";
+      const tip = `${def.name}${stack} — ${def.desc}`;
+      return `<span class="mut-chip" data-tip="${tip}" data-mut="${def.key}" data-n="${n}" role="button" tabindex="0">${def.icon}${stack}</span>`;
+    })
     .join("");
+  for (const chip of el.querySelectorAll(".mut-chip")) {
+    chip.addEventListener("click", () => showToast(`🧬 ${chip.dataset.tip}`));
+  }
 }
 
 // Volatile mutation: any zombie destroyed close to the Heart bursts and
@@ -1802,8 +2263,8 @@ function updateMonsters(dt, now) {
     let moving = false;
     // Regeneration mutation: wounded zombies knit back toward full over sim
     // time — chip damage (turret bolts, glancing blasts) stops sticking.
-    if (mut.regen > 0 && m.hp < maxHpFor(m.stackLevel)) {
-      m.hp = Math.min(maxHpFor(m.stackLevel), m.hp + mut.regen * dt);
+    if (mut.regen > 0 && m.hp < maxHpFor(m)) {
+      m.hp = Math.min(maxHpFor(m), m.hp + mut.regen * dt);
     }
     // Mid-fight (fightTarget set by updateZombieCombat, one frame behind):
     // plant feet and square up toward the opponent — all damage comes from
@@ -1825,7 +2286,7 @@ function updateMonsters(dt, now) {
         }
         m.timer = 1.5 + Math.random() * 2.5;
       }
-      const spd = m.speed * (isSlowed(m.x, m.z) ? SLOW_FACTOR : 1);
+      const spd = m.speed * slowFactorAt(m.x, m.z);
       const nx = m.x + Math.sin(m.angle) * spd * dt;
       const nz = m.z + Math.cos(m.angle) * spd * dt;
       const inBounds = nx > 2 && nx < GRID - 3 && nz > 2 && nz < GRID - 3;
@@ -1875,7 +2336,7 @@ function updateMonsters(dt, now) {
     // kill, to sell the "eating" impact.
     if (m.eatPulse > 0) m.eatPulse = Math.max(0, m.eatPulse - dt);
     const pulse = m.eatPulse > 0 ? 1 + 0.25 * Math.sin((m.eatPulse / 0.3) * Math.PI) : 1;
-    m.rig.root.scale.setScalar(stackScale(m.stackLevel) * pulse);
+    m.rig.root.scale.setScalar(bodyScale(m) * pulse);
 
     if (moving) m.walkPhase += dt * m.speed * 3.2;
     const swing = Math.sin(m.walkPhase) * 0.5;
@@ -1885,13 +2346,13 @@ function updateMonsters(dt, now) {
     m.rig.armR.rotation.x = -1.15 + swing * 0.3;
 
     // Health bar — only shown once damaged, hidden again at full HP.
-    const damaged = m.hp < maxHpFor(m.stackLevel);
+    const damaged = m.hp < maxHpFor(m);
     m.healthBg.visible = m.healthFill.visible = damaged;
     if (damaged) {
-      const barY = m.visualY + hpBarOffset(m.stackLevel);
+      const barY = m.visualY + hpBarOffset(m);
       m.healthBg.position.set(m.x, barY, m.z);
       m.healthFill.position.set(m.x, barY, m.z);
-      const ratio = Math.max(0, m.hp / maxHpFor(m.stackLevel));
+      const ratio = Math.max(0, m.hp / maxHpFor(m));
       m.healthFill.scale.set(HP_BAR_INNER_W * ratio, HP_BAR_INNER_H, 1);
       m.healthFill.material.color.setHex(ratio > 0.5 ? 0x4fd68a : ratio > 0.25 ? 0xffcf5a : 0xff5a4a);
     }
@@ -2265,6 +2726,7 @@ function generateWorld(seed, biomeKey, keepZombies = false) {
     }
     buildHeart(true); // re-seat the Heart on the new ground, keeping its HP
     reseatTurrets();
+    rebuildSanctuaryRing(); // new hills under the same consecrated circle
   } else {
     spawnMonsters(biome, currentHeights, seed);
     resetRun(); // every brand-new world is a brand-new run
@@ -2394,10 +2856,10 @@ function updateEliteMarkers(now) {
     ring.position.set(m.x, m.visualY + 0.05, m.z);
     ring.rotation.z = now * 1.8;
     const pulse = 1 + 0.15 * Math.sin(now * 3 + m.phase);
-    ring.scale.setScalar(stackScale(m.stackLevel) * pulse);
+    ring.scale.setScalar(bodyScale(m) * pulse);
     ring.visible = true;
 
-    beam.position.set(m.x, m.visualY + hpBarOffset(m.stackLevel) + 1.6, m.z);
+    beam.position.set(m.x, m.visualY + hpBarOffset(m) + 1.6, m.z);
     beam.scale.set(0.7, 3.2, 1);
     beam.material.opacity = 0.65 + 0.15 * Math.sin(now * 3 + m.phase);
     beam.visible = true;
@@ -2446,10 +2908,10 @@ function updateBossMarkers(now) {
     ring.position.set(m.x, m.visualY + 0.05, m.z);
     ring.rotation.z = -now * 1.4;
     const pulse = 1 + 0.12 * Math.sin(now * 2.4 + m.phase);
-    ring.scale.setScalar(stackScale(m.stackLevel) * 1.15 * pulse);
+    ring.scale.setScalar(bodyScale(m) * 1.15 * pulse);
     ring.visible = true;
 
-    beam.position.set(m.x, m.visualY + hpBarOffset(m.stackLevel) + 1.8, m.z);
+    beam.position.set(m.x, m.visualY + hpBarOffset(m) + 1.8, m.z);
     beam.scale.set(0.9, 3.8, 1);
     beam.material.opacity = 0.7 + 0.15 * Math.sin(now * 2.4 + m.phase);
     beam.visible = true;
@@ -2460,7 +2922,119 @@ function updateBossMarkers(now) {
   }
 }
 
+/* ---------- tower inspector: hover a tower to read its stats ---------- */
+// Towers are bought blind otherwise — you can't tell a maxed frost aura from
+// a fresh one by looking. Hovering one prints its live numbers and draws the
+// exact ground it covers, which is what makes placement a real decision.
+
+let hoveredTower = null;
+let towerRangeRing = null;
+
+// Ground-projected outline of a tower's coverage, sampled onto the terrain
+// like the Sanctuary ring so it hugs hills instead of cutting through them.
+function showTowerRangeRing(t, radius) {
+  clearTowerRangeRing();
+  const pts = [];
+  const steps = 72;
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    const x = t.x + Math.sin(a) * radius;
+    const z = t.z + Math.cos(a) * radius;
+    pts.push(new THREE.Vector3(x, heightAt(x, z) + 0.6, z));
+  }
+  towerRangeRing = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({
+      color: TOWER_LOOK[t.kind].bolt, transparent: true, opacity: 0.7, depthWrite: false,
+    })
+  );
+  root.add(towerRangeRing);
+}
+
+function clearTowerRangeRing() {
+  if (!towerRangeRing) return;
+  root.remove(towerRangeRing);
+  towerRangeRing.geometry.dispose();
+  towerRangeRing.material.dispose();
+  towerRangeRing = null;
+}
+
+// The stat block for one tower, as HTML rows. Every number is derived live,
+// so it reflects the ⭐ picks and Legacy ranks already spent this run.
+function towerStatsHtml(t) {
+  const def = core.TOWER_TYPES.find((x) => x.key === t.kind);
+  const rows = [];
+  if (t.kind === "frost") {
+    rows.push(["Aura", `${core.frostRadius(turretRangeUps).toFixed(1)} blocks`]);
+    rows.push(["Chill", `${core.frostTickDamage(turretRanks()).toFixed(2)} dmg / ${core.FROST_TICK}s`]);
+    rows.push(["Slow", `×${core.FROST_SLOW} move speed`]);
+    rows.push(["Targets", "everything inside, at once"]);
+  } else if (t.kind === "arc") {
+    rows.push(["Range", `${turretRange()} blocks`]);
+    rows.push(["Damage", `${core.arcDamage(turretRanks()).toFixed(2)} per body`]);
+    rows.push(["Fire rate", `${(1 / core.arcCooldown(rateRanks())).toFixed(2)}/s`]);
+    rows.push(["Forks", `up to ${core.ARC_CHAIN} bodies, ${core.ARC_JUMP} blocks apart`]);
+    rows.push(["Bolt speed", `${Math.round(boltSpeed())} blocks/s`]);
+  } else if (t.kind === "lance") {
+    rows.push(["Range", `${turretRange()} blocks`]);
+    rows.push(["Damage", `${core.lanceDamage(turretRanks()).toFixed(2)} per body`]);
+    rows.push(["Fire rate", `${(1 / core.lanceCooldown(rateRanks())).toFixed(2)}/s`]);
+    rows.push(["Pierce", `unlimited, ${core.LANCE_WIDTH * 2} blocks wide`]);
+  } else {
+    rows.push(["Range", `${turretRange()} blocks`]);
+    rows.push(["Damage", `${turretDmg().toFixed(2)} per bolt`]);
+    rows.push(["Fire rate", `${(1 / turretCooldown()).toFixed(2)}/s`]);
+    rows.push(["DPS", `${(turretDmg() / turretCooldown()).toFixed(2)}`]);
+    rows.push(["Bolt speed", `${Math.round(boltSpeed())} blocks/s`]);
+  }
+  return `<div class="tip-title">${def.icon} ${def.name}</div>
+    <div class="tip-desc">${def.desc}</div>
+    ${rows.map(([k, v]) => `<div class="tip-row"><span>${k}</span><span>${v}</span></div>`).join("")}
+    <div class="tip-foot">Armor-ignoring · upgraded by 🎯 📡 ⏩ 🚀 picks</div>`;
+}
+
+// Raycast the cursor against the standing towers; show/hide the panel. Runs
+// off the same pointermove as the aim indicator, so it costs one extra
+// raycast against a handful of groups.
+function updateTowerHover() {
+  const tip = document.getElementById("vx-tower-tip");
+  if (!tip) return;
+  let hit = null;
+  if (hoverClientX !== null && turrets.length) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((hoverClientX - rect.left) / rect.width) * 2 - 1,
+      -((hoverClientY - rect.top) / rect.height) * 2 + 1
+    );
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(turrets.map((t) => t.group), true);
+    if (hits.length) {
+      // Walk back up to the group the hit mesh belongs to.
+      hit = turrets.find((t) => {
+        let o = hits[0].object;
+        while (o) { if (o === t.group) return true; o = o.parent; }
+        return false;
+      }) || null;
+    }
+  }
+  if (hit !== hoveredTower) {
+    hoveredTower = hit;
+    clearTowerRangeRing();
+    if (hit) showTowerRangeRing(hit, hit.kind === "frost" ? core.frostRadius(turretRangeUps) : turretRange());
+  }
+  if (!hit) { tip.classList.remove("show"); return; }
+  tip.innerHTML = towerStatsHtml(hit);
+  // Pin the panel to the cursor, flipping it before it can run off-screen.
+  const pad = 14;
+  const flipX = hoverClientX > window.innerWidth - 260;
+  const flipY = hoverClientY > window.innerHeight - 200;
+  tip.style.left = `${flipX ? hoverClientX - 240 - pad : hoverClientX + pad}px`;
+  tip.style.top = `${flipY ? hoverClientY - 190 : hoverClientY + pad}px`;
+  tip.classList.add("show");
+}
+
 function updateAimIndicator() {
+  updateTowerHover();
   if (hoverClientX === null || !blockMeshes) { hideAllHighlights(); return; }
   const point = raycastGround(hoverClientX, hoverClientY);
   if (!point) { hideAllHighlights(); return; }
@@ -2754,6 +3328,13 @@ function updateFx(dt) {
         const r = 0.6 + p.maxR * (1 - Math.pow(1 - t, 2));
         p.obj.scale.set(r, r, 1);
         p.obj.material.opacity = 0.8 * (1 - t);
+        break;
+      }
+      // A lance beam: holds its line and thins out, so the swept lane stays
+      // legible for the instant it's on screen.
+      case "beam": {
+        p.obj.material.opacity = 0.75 * (1 - t) * (1 - t);
+        p.obj.scale.y = 1 - 0.6 * t;
         break;
       }
       case "spark": {
@@ -3097,6 +3678,8 @@ function init() {
     if (e.key === "2") chooseUpgrade("damage");
     if (e.key === "3") chooseUpgrade("turretdmg");
     if (e.key === "4") chooseUpgrade("turretrange");
+    if (e.key === "5") chooseUpgrade("turretrate");
+    if (e.key === "6") chooseUpgrade("boltspeed");
   });
   window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -3147,8 +3730,14 @@ function init() {
   document.getElementById("vx-up-damage")?.addEventListener("click", () => chooseUpgrade("damage"));
   document.getElementById("vx-up-turretdmg")?.addEventListener("click", () => chooseUpgrade("turretdmg"));
   document.getElementById("vx-up-turretrange")?.addEventListener("click", () => chooseUpgrade("turretrange"));
+  document.getElementById("vx-up-turretrate")?.addEventListener("click", () => chooseUpgrade("turretrate"));
+  document.getElementById("vx-up-boltspeed")?.addEventListener("click", () => chooseUpgrade("boltspeed"));
   document.getElementById("vx-shop-repair").addEventListener("click", buyRepair);
   document.getElementById("vx-shop-turret").addEventListener("click", buyTurret);
+  document.getElementById("vx-shop-frost").addEventListener("click", buyFrostTower);
+  document.getElementById("vx-shop-arc").addEventListener("click", buyArcTower);
+  document.getElementById("vx-shop-lance").addEventListener("click", buyLanceTower);
+  document.getElementById("vx-shop-ward").addEventListener("click", buyWard);
   document.getElementById("vx-shop-mine").addEventListener("click", buyMine);
   document.getElementById("vx-shop-slow").addEventListener("click", buySlow);
 
@@ -3318,6 +3907,7 @@ function loop() {
     updateWaves(dt * simSpeed);
     updateMutations(dt * simSpeed);
     checkCondensation();
+    refreshSanctuaryRingHeights(dt);
     // Slow-field dome: sits on the Heart while active, vanishes after.
     if (slowDome && heart) {
       const active = now < slowUntil;
