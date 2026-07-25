@@ -129,6 +129,13 @@
       <span class="hud-label">⚡ Energy</span>
       <span id="vx-energy-val">0</span>
     </div>
+    <div id="vx-spawnrate" data-tip="Every zombie you kill is replaced by this many. It rises by +0.1 for every 25 levels the horde reaches — killing things does not thin the map, it feeds it.">
+      <div class="hud-score-row">
+        <span class="hud-label">🧟 Spawns per kill</span>
+        <span id="vx-spawnrate-val">×1.1</span>
+      </div>
+      <div id="vx-spawnrate-note">×1.2 once the horde hits Lv 25</div>
+    </div>
     <div id="vx-combo" class="hud-combo">
       <div class="hud-score-row">
         <span class="hud-label">🔥 <span id="vx-combo-val">×0</span></span>
@@ -175,7 +182,7 @@
     </div>
     <details id="vx-tweaks">
       <summary>⚙️ Tweaks</summary>
-      <div class="hud-slider-row" title="Fresh zombies spawned for each zombie YOU kill with a blast — fractions roll stochastically (1.1 = +10% chance of one extra)">
+      <div class="hud-slider-row" data-tip="BASE fresh zombies spawned per zombie you kill (fractions roll stochastically). The horde's level bonus — +0.1 per 25 levels — is added on top of whatever you set here.">
         <span class="hud-label">Spawns per blast kill</span>
         <div class="hud-slider-inner">
           <input type="range" id="vx-spawn-per-kill" min="0" max="10" step="0.1" value="1.1" />

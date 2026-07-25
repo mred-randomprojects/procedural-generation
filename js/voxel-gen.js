@@ -78,9 +78,10 @@ const DEPTH_SPARE = 5;
 // file) without explicit user direction; if a limit starts to feel necessary
 // for performance, raise it with the user rather than silently capping.
 // Population flows are all user-tweakable sliders (⚙️ Tweaks panel):
-// spawnsPerKill fresh zombies per player blast kill (default 1.1 = every
-// kill replaces itself +10% chance of a bonus runt — the waves drive real
-// escalation; see core.spawnsForKills for the fractional roll), and
+// spawnsPerKill fresh zombies per player blast kill (base 1.1 = every kill
+// replaces itself +10% chance of a bonus runt — see core.spawnsForKills for
+// the fractional roll — PLUS +0.1 for every 25 levels the horde reaches,
+// uncapped: see core.effectiveSpawnsPerKill and spawnsPerKillNow), and
 // spawnsPerEat per zombie eaten by another zombie via resolveZombieKill()
 // (default 1 = eats are population-neutral; 0 = the strong thin the herd).
 // User-chosen slider values are settings, not artificial limits.
@@ -765,6 +766,7 @@ function spawnZombieAt(x, z, level = 1, isBoss = false, arch = null) {
   m.hp = maxHpFor(m); // breed HP multiplier needs the monster, not just its level
   monsters.push(m);
   noteBreedSeen(breed);
+  notePeakLevel(level);
 }
 
 // The breed's tell: its tint multiplies the (already textured) skin and
@@ -893,7 +895,7 @@ function clearSanctuaryRing() {
   sanctuaryRing = null;
 }
 
-/* ---------- condensation: 200 of a level fuse into 100 of the next ---------- */
+/* ---------- condensation: 100 of a level fuse into 50 of the next ---------- */
 // The user-directed pressure valve on entity count (see the note by
 // MONSTER_COUNT): the moment any stack level holds CONDENSE_THRESHOLD living
 // non-boss zombies, the whole cohort fuses — all are removed, and half as
@@ -905,6 +907,38 @@ function clearSanctuaryRing() {
 // enter at level X+1 minimum — the world as a whole outgrows its larva
 // stage. Resets to 1 with each new run.
 let minSpawnLevel = 1;
+
+/* ---------- the run's peak level & the escalating spawn rate ---------- */
+// The strongest zombie that has EVER existed this run. It only ever climbs
+// (killing the monster doesn't undo what the horde learned), and every 25
+// levels of it adds +0.1 to how many zombies each of your kills puts back
+// on the field — see core.effectiveSpawnsPerKill.
+let runPeakLevel = 1;
+
+function notePeakLevel(level) {
+  if (level <= runPeakLevel) return;
+  const beforeTier = core.spawnRateTier(runPeakLevel);
+  runPeakLevel = level;
+  const afterTier = core.spawnRateTier(runPeakLevel);
+  if (afterTier > beforeTier) announceSpawnRate();
+  updateScoreHud();
+}
+
+// The escalation is a loud, run-defining event — the player has to know the
+// board just got permanently hungrier, not quietly wonder why kills stopped
+// thinning the map.
+function announceSpawnRate() {
+  const rate = spawnsPerKillNow().toFixed(1);
+  showBanner("fuse", "🧟 THE HORDE THICKENS", `EVERY KILL NOW SPAWNS ×${rate}`,
+    `The horde has reached level ${runPeakLevel} — each zombie you destroy comes back ${rate}-fold`);
+  playBossSpawn();
+}
+
+// The live rate for player kills: the Tweaks slider value plus the run's
+// level-earned bonus.
+function spawnsPerKillNow() {
+  return core.effectiveSpawnsPerKill(spawnsPerKill, runPeakLevel);
+}
 
 function checkCondensation() {
   if (monsters.length < core.CONDENSE_THRESHOLD) return; // cheap early-out
@@ -1222,6 +1256,7 @@ function resetRun() {
   killCount = 0;
   xp = 0;
   minSpawnLevel = 1; // condensation ratchet starts over
+  runPeakLevel = 1; // …and so does the escalating spawn rate
   turretDamageUps = 0;
   turretRangeUps = 0;
   turretRateUps = 0;
@@ -1823,7 +1858,7 @@ function killZombieByPlayer(m, source = "turret") {
   maybeCelebrateNewBest();
   updateScoreHud();
   checkUpgradeUnlocks();
-  let toSpawn = core.spawnsForKills(1, spawnsPerKill);
+  let toSpawn = core.spawnsForKills(1, spawnsPerKillNow());
   while (toSpawn-- > 0) queueZombieSpawn();
   updateZombieBoard();
 }
@@ -1843,7 +1878,9 @@ let atkPerLevel = core.CANONICAL_TWEAKS.atkPerLevel; // attack-rate growth per l
 // resetTweaksToDefaults() share a single source of truth for each slider's
 // default value, label formatting, and live apply side-effects.
 const TWEAK_SLIDERS = [
-  { id: "vx-spawn-per-kill", def: core.CANONICAL_TWEAKS.spawnsPerKill, fmt: (v) => String(Math.round(v * 10) / 10), apply: (v) => { spawnsPerKill = v; } },
+  // The BASE rate; the horde's level bonus is added on top at use time, so
+  // the HUD readout has to be refreshed when this moves.
+  { id: "vx-spawn-per-kill", def: core.CANONICAL_TWEAKS.spawnsPerKill, fmt: (v) => String(Math.round(v * 10) / 10), apply: (v) => { spawnsPerKill = v; updateScoreHud(); } },
   { id: "vx-spawn-per-eat", def: core.CANONICAL_TWEAKS.spawnsPerEat, fmt: (v) => String(v), apply: (v) => { spawnsPerEat = v; } },
   { id: "vx-spawn-delay", def: core.CANONICAL_TWEAKS.spawnDelay, fmt: (v) => String(v), apply: (v) => { spawnDelay = v; } },
   { id: "vx-speed-per-level", def: core.CANONICAL_TWEAKS.speedPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => {
@@ -2134,6 +2171,7 @@ function resolveZombieKill(killer, loser) {
     killer.speed = (stackSpeed(killer.stackLevel) + Math.random() * 0.2) * (killer.arch?.speed ?? 1);
   }
   maybeMetamorphose(killer);
+  notePeakLevel(killer.stackLevel);
   if (killer.stackLevel >= 5) unlockAchievement("evolved-5");
   if (killer.stackLevel >= 10) unlockAchievement("evolved-10");
   updateZombieBoard();
@@ -2151,6 +2189,23 @@ function updateScoreHud() {
   if (radiusEl) radiusEl.textContent = String(maxUnlockedBlast);
   const damageEl = document.getElementById("vx-damage-val");
   if (damageEl) damageEl.textContent = String(blastDamage);
+
+  // The escalating spawn rate, front and centre: this is the single number
+  // that explains why the map stops thinning out, so it shows the live rate,
+  // how much of it the horde's level earned, and where the next step lands.
+  const rateEl = document.getElementById("vx-spawnrate-val");
+  const rateNote = document.getElementById("vx-spawnrate-note");
+  const rateBlock = document.getElementById("vx-spawnrate");
+  const bonus = core.spawnRateBonus(runPeakLevel);
+  if (rateEl) rateEl.textContent = `×${spawnsPerKillNow().toFixed(1)}`;
+  if (rateBlock) rateBlock.classList.toggle("boosted", bonus > 0);
+  if (rateNote) {
+    const nextLv = core.nextSpawnRateLevel(runPeakLevel);
+    const nextRate = core.effectiveSpawnsPerKill(spawnsPerKill, nextLv).toFixed(1);
+    rateNote.textContent = bonus > 0
+      ? `+${bonus.toFixed(1)} from Lv ${runPeakLevel} horde · ×${nextRate} at Lv ${nextLv}`
+      : `×${nextRate} once the horde hits Lv ${nextLv}`;
+  }
 
   const xpEl = document.getElementById("vx-xp-val");
   if (xpEl) xpEl.textContent = core.fmtNum(xp);
@@ -2176,11 +2231,16 @@ function updateZombieBoard() {
   const floorRow = minSpawnLevel > 1
     ? `<div class="hud-board-row hud-board-floor"><span>⬆ Spawn floor</span><span>Lv ${minSpawnLevel}</span></div>`
     : "";
+  // The peak level is what drives the escalating spawn rate, so it belongs
+  // next to the population it keeps inflating.
+  const peakRow = runPeakLevel > 1
+    ? `<div class="hud-board-row hud-board-floor"><span>🔺 Peak level</span><span>Lv ${runPeakLevel}</span></div>`
+    : "";
   if (levels.length === 0) {
-    el.innerHTML = `${floorRow}${formRows()}${breedRows()}${towerRows()}<div class="hud-board-empty">No zombies left</div>`;
+    el.innerHTML = `${peakRow}${floorRow}${formRows()}${breedRows()}${towerRows()}<div class="hud-board-empty">No zombies left</div>`;
     return;
   }
-  el.innerHTML = floorRow + levels
+  el.innerHTML = peakRow + floorRow + levels
     .map((lv) => `<div class="hud-board-row"><span>Lvl ${lv}</span><span>${counts.get(lv)}</span></div>`)
     .join("") + formRows() + breedRows() + towerRows();
 }
@@ -2593,10 +2653,11 @@ function killMonstersNear(bx, bz, r) {
     checkUpgradeUnlocks();
     if (kills >= 2) spawnKillStreakPopup(bx, heightAt(bx, bz) + 2.6, bz, kills);
     // No cap, intentionally — see the "no artificial limits" note near
-    // MONSTER_COUNT. Every kill spawns `spawnsPerKill` more (default 1.1:
-    // each kill replaces itself, fractional part rolls stochastically —
-    // see core.spawnsForKills), unconditionally, forever.
-    let toSpawn = core.spawnsForKills(kills, spawnsPerKill);
+    // MONSTER_COUNT. Every kill spawns spawnsPerKillNow() more — the base
+    // 1.1 (each kill replaces itself, fractional part rolls stochastically,
+    // see core.spawnsForKills) plus +0.1 for every 25 levels the horde has
+    // reached. Unconditional, forever, and it only ever grows.
+    let toSpawn = core.spawnsForKills(kills, spawnsPerKillNow());
     while (toSpawn-- > 0) queueZombieSpawn();
   }
 }

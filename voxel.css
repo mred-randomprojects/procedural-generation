@@ -555,6 +555,35 @@ body.daily #vx-new:disabled {
    count, the payout multiplier, and a bar draining toward the chain's end. */
 .hud-combo { display: none; margin-top: 8px; }
 .hud-combo.active { display: block; }
+
+/* The escalating spawn rate — the number that explains why killing things
+   never thins the map. Reads as neutral info until the horde's level has
+   actually earned a step, then it goes hot and stays hot. */
+#vx-spawnrate {
+  margin: 6px 0;
+  padding: 5px 7px 4px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(120, 150, 180, 0.25);
+}
+#vx-spawnrate-val {
+  color: #9fe8ff;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+#vx-spawnrate-note {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: #7f93a5;
+  line-height: 1.3;
+}
+#vx-spawnrate.boosted {
+  background: rgba(255, 120, 60, 0.12);
+  border-color: rgba(255, 140, 70, 0.55);
+}
+#vx-spawnrate.boosted #vx-spawnrate-val { color: #ff9a5c; }
+#vx-spawnrate.boosted .hud-label { color: #ffbe8a; }
+#vx-spawnrate.boosted #vx-spawnrate-note { color: #d2a184; }
 .hud-combo .hud-label { color: #ffb45a; font-weight: 700; }
 .hud-combo-mult { color: #ffcf5a; font-size: 12px; font-variant-numeric: tabular-nums; }
 .hud-combo-bar {
@@ -809,6 +838,19 @@ body.daily #vx-new:disabled {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
   }
+}
+
+/* The run-stats panel hugs the right edge — its cards hang left and drop
+   below, or they'd render off-screen and off the top. */
+#vx-spawnrate[data-tip]::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  transform: translateY(-3px);
+}
+@media (hover: hover) and (pointer: fine) {
+  #vx-spawnrate[data-tip]:hover::after { transform: translateY(0); }
 }
 
 /* Mutation chips live at the very top of the screen — their cards drop

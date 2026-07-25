@@ -39,6 +39,9 @@ A complete siege-defense game on procedurally generated voxel terrain:
   and a runt can wear down an elite given long enough.
 - **The Sanctuary** — nothing spawns on consecrated ground around the Heart,
   and the 🛡️ Ward buys more of it: you're paying for the horde's walk.
+- **The horde thickens** — every zombie you kill is replaced by 1.1 of
+  itself, and that rate climbs +0.1 for every 25 levels the horde reaches
+  (uncapped). Killing things never thins the map; it feeds it.
 - **Kill combos** — chained kills inside a rolling window (4s, widened by
   Legacy ranks) multiply every payout, uncapped.
 - **Boss waves** — every 5th wave lands a crowned colossus with an energy

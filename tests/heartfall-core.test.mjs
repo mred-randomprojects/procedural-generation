@@ -115,9 +115,11 @@ test("mutation pool entries are well-formed and unique", () => {
 /* ---------- condensation ---------- */
 
 test("condensation halves a fusing cohort, rounding down", () => {
-  assert.equal(core.condenseSurvivors(200), 100);
-  assert.equal(core.condenseSurvivors(201), 100);
-  assert.ok(core.CONDENSE_THRESHOLD >= 100); // a merge, not a cull
+  assert.equal(core.condenseSurvivors(100), 50);
+  assert.equal(core.condenseSurvivors(101), 50);
+  assert.equal(core.CONDENSE_THRESHOLD, 100);
+  // A merge, not a cull: a fusing cohort must always leave survivors behind.
+  assert.ok(core.condenseSurvivors(core.CONDENSE_THRESHOLD) > 0);
 });
 
 test("condensation ratchets the spawn floor up, never down", () => {
@@ -195,6 +197,40 @@ test("armor still makes level a real advantage in a fight", () => {
   const vsStrong = core.effectiveHitDamage(core.dpsFor(3), core.attackInterval(3), 12);
   assert.ok(vsStrong < vsWeak);
   assert.ok(vsStrong > 0);
+});
+
+/* ---------- the escalating spawn rate ---------- */
+
+test("spawn rate steps +0.1 every 25 peak levels, forever", () => {
+  const base = core.CANONICAL_TWEAKS.spawnsPerKill;
+  assert.equal(core.effectiveSpawnsPerKill(base, 0), 1.1);
+  assert.equal(core.effectiveSpawnsPerKill(base, 24), 1.1); // not yet
+  assert.equal(core.effectiveSpawnsPerKill(base, 25), 1.2); // first step
+  assert.equal(core.effectiveSpawnsPerKill(base, 49), 1.2);
+  assert.equal(core.effectiveSpawnsPerKill(base, 50), 1.3);
+  assert.equal(core.effectiveSpawnsPerKill(base, 159), 1.7);
+  // No ceiling, and no float dust in the HUD readout.
+  for (let lv = 0; lv <= 5000; lv += 7) {
+    const r = core.effectiveSpawnsPerKill(base, lv);
+    assert.equal(r, Math.round(r * 1e6) / 1e6, `level ${lv} leaked float dust`);
+  }
+  assert.ok(core.effectiveSpawnsPerKill(base, 100000) > 400);
+});
+
+test("spawn rate is monotone and its next threshold is always ahead", () => {
+  let prev = 0;
+  for (let lv = 0; lv <= 2000; lv++) {
+    const r = core.effectiveSpawnsPerKill(1.1, lv);
+    assert.ok(r >= prev, `level ${lv} went backwards`);
+    prev = r;
+    const next = core.nextSpawnRateLevel(lv);
+    assert.ok(next > lv, `level ${lv} says its next step is ${next}`);
+    // Reaching the advertised threshold must actually deliver the step.
+    assert.ok(core.effectiveSpawnsPerKill(1.1, next) > r - 1e-9);
+  }
+  assert.equal(core.nextSpawnRateLevel(0), 25);
+  assert.equal(core.nextSpawnRateLevel(25), 50);
+  assert.equal(core.nextSpawnRateLevel(159), 175);
 });
 
 /* ---------- evolution forms ---------- */

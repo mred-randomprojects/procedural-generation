@@ -9,8 +9,8 @@
 // design (blast costs, combo multipliers, boss levels): do not add caps
 // without explicit user direction. The one user-directed pressure valve is
 // CONDENSATION (see CONDENSE_THRESHOLD below): a level's population fuses
-// into half as many next-level zombies at 500 — strength is conserved and
-// keeps escalating, only the entity count is tamed.
+// into half as many next-level zombies once it reaches the threshold —
+// strength is conserved and keeps escalating, only the entity count is tamed.
 
 /* ---------- seeded PRNG (self-contained copy for contracts/daily) ---------- */
 
@@ -296,12 +296,15 @@ export function mutationAtIndex(seedStr, index) {
 /* ---------- condensation: population converts into strength ---------- */
 // USER-DIRECTED design (an explicit revision of the "no limits" principle,
 // for performance): the total population is still never capped, but when any
-// single stack level accumulates CONDENSE_THRESHOLD living zombies, that
-// whole cohort fuses — every one of them is removed and half as many spawn
+// single stack level accumulates CONDENSE_THRESHOLD (100) living zombies,
+// that whole cohort fuses — every one of them is removed and half as many spawn
 // at the NEXT level up, in their places. Quantity becomes quality: entity
 // counts stay renderable while the horde's strength keeps climbing.
 
-export const CONDENSE_THRESHOLD = 200;
+// Lowered 500 → 200 → 100 at the user's direction: fusing sooner means the
+// horde converts into strength faster and the frame budget never sees a
+// four-figure crowd of one level.
+export const CONDENSE_THRESHOLD = 100;
 
 // How many level-(N+1) zombies a fusing cohort of `count` produces.
 export function condenseSurvivors(count) {
@@ -510,6 +513,38 @@ export const CANONICAL_TWEAKS = {
   atkPerLevel: 0.25,
 };
 
+/* ---------- the escalating spawn rate ---------- */
+// USER-DIRECTED: every 25 levels the horde reaches, each zombie you kill
+// spawns +0.1 more in its place — 1.1 → 1.2 → 1.3 → … with no ceiling. So a
+// run that lets the horde evolve pays for it twice: the survivors are
+// stronger AND they come back thicker. The anchor is the run's PEAK zombie
+// level (the strongest thing that has existed this run), which rises through
+// both eating and condensation, and never falls when that monster dies.
+
+export const SPAWN_RATE_LEVEL_STEP = 25;
+export const SPAWN_RATE_STEP = 0.1;
+
+// How many whole 25-level thresholds the run has crossed.
+export function spawnRateTier(peakLevel) {
+  return Math.floor(Math.max(0, peakLevel) / SPAWN_RATE_LEVEL_STEP);
+}
+
+export function spawnRateBonus(peakLevel) {
+  return SPAWN_RATE_STEP * spawnRateTier(peakLevel);
+}
+
+// The rate actually used for player kills. Rounded off float dust so the HUD
+// never reads "×1.4000000000000001".
+export function effectiveSpawnsPerKill(baseRate, peakLevel) {
+  return Math.round((baseRate + spawnRateBonus(peakLevel)) * 1e6) / 1e6;
+}
+
+// The peak level at which the rate next steps up — drives the HUD's
+// "next: ×1.4 at Lv 75" readout.
+export function nextSpawnRateLevel(peakLevel) {
+  return (spawnRateTier(peakLevel) + 1) * SPAWN_RATE_LEVEL_STEP;
+}
+
 // Fractional spawn rates, resolved stochastically: `kills` kills at `rate`
 // spawn floor(kills*rate) guaranteed, +1 more with probability equal to the
 // leftover fraction. Expected value is exactly kills*rate, and any 10 kills
@@ -661,7 +696,7 @@ export const ACHIEVEMENTS = {
   "kills-1000": "🏆 Legion Slayer — 1,000 lifetime kills",
   "legacy-5": "🏆 Dynasty — earn 5 Legacy ranks",
   "adapted": "🏆 Adapted — endure 5 horde mutations in one run",
-  "critical-mass": "🏆 Critical Mass — witness 200 zombies condense into a stronger horde",
+  "critical-mass": "🏆 Critical Mass — witness 100 zombies condense into a stronger horde",
   "frostbite": "🏆 Frostbite — raise a Frost Tower",
   "arclight": "🏆 Arclight — raise an Arc Tower",
   "lancer": "🏆 Lancer — raise a Lance Tower",
