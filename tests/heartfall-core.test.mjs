@@ -160,6 +160,42 @@ test("armor reduces logarithmically and never reaches immunity", () => {
   assert.ok(core.armorReduction(10) > 0.4);
 });
 
+test("tech armor: level 1 takes FULL damage, exactly", () => {
+  // Not near 1 — exactly 1. A level-1 zombie has exactly 1 HP and the
+  // weakest blast deals exactly 1 damage, so any reduction at all would
+  // leave every runt in the game alive on a sliver.
+  assert.equal(core.techDamageMultiplier(1), 1);
+  assert.equal(core.effectiveTechDamage(1, 1), 1);
+  assert.ok(core.effectiveTechDamage(core.blastZombieDamage(false, 1), 1) >= core.maxHpFor(1));
+});
+
+test("tech armor spares the early game and bites in triple digits", () => {
+  // The levels a player meets in the opening minutes barely notice it…
+  assert.ok(core.techDamageMultiplier(5) > 0.9);
+  assert.ok(core.techDamageMultiplier(10) > 0.8);
+  // …while a deep-run monster costs about twice the shots. This is the
+  // tuning target that produced the curve: ~16 bolts at level 203, not ~8.
+  const dmg = 28.5, lv = 203;
+  const shots = Math.ceil(core.maxHpFor(lv) / core.effectiveTechDamage(dmg, lv));
+  assert.ok(shots >= 14 && shots <= 18, `expected ~16 shots at level ${lv}, got ${shots}`);
+});
+
+test("tech armor decays forever but never reaches immunity", () => {
+  let prev = 1;
+  for (let lv = 2; lv <= 5000; lv++) {
+    const m = core.techDamageMultiplier(lv);
+    assert.ok(m < prev, `level ${lv} must be tougher than ${lv - 1}`);
+    assert.ok(m > 0, `level ${lv} must never be immune to tech`);
+    prev = m;
+  }
+  assert.ok(core.techDamageMultiplier(1e9) > 0);
+  // Tech armor must stay strictly GENTLER than zombie-vs-zombie armor at
+  // every level, or player weapons become the worst way to kill anything.
+  for (let lv = 2; lv <= 5000; lv++) {
+    assert.ok(core.techDamageMultiplier(lv) > core.damageTakenMultiplier(lv), `level ${lv}`);
+  }
+});
+
 test("effectiveHitDamage is always positive: no attacker is ever shut out", () => {
   // The old flat-armor rule zeroed this out entirely; a runt must now be
   // able to wear an elite down, however slowly.

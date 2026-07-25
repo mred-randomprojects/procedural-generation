@@ -83,8 +83,9 @@ export function upgradeUnlockCost(n) {
 
 /* ---------- blast damage ---------- */
 // One blast hits every zombie inside the radius for 1 point — 2 inside the
-// inner core (half the radius) — times the player's blast damage stat.
-// Armor-ignoring: blasts are tech, like turrets and mines.
+// inner core (half the radius) — times the player's blast damage stat. The
+// target's tech armor (techDamageMultiplier) is applied on top of this by
+// the caller, as it is for every other player weapon.
 export function blastZombieDamage(withinCore, blastDamage = 1) {
   return (withinCore ? 2 : 1) * blastDamage;
 }
@@ -115,7 +116,8 @@ export function dpsFor(level, dmgPerLevel = 1) { return 1 + (level - 1) * dmgPer
 // It's now a multiplier that decays logarithmically — steep at first, then
 // ever shallower, and asymptotically approaching (but never reaching) zero.
 // A level-1000 monster still takes damage from a level-1 runt; it just takes
-// a very long time. Player blasts/turrets/mines ignore armor entirely.
+// a very long time. Player tech has its OWN, gentler curve — see
+// techDamageMultiplier below.
 // 0.5 keeps mid-level elites roughly as tanky as the old flat rule made
 // them (a level 10 sheds ~53% instead of ~80%) while removing the wall:
 // equal-level fights now resolve in seconds rather than grinding.
@@ -129,6 +131,37 @@ export function damageTakenMultiplier(level) {
 // The same number as a percentage reduction, for HUD readouts. 0 at level 1.
 export function armorReduction(level) {
   return 1 - damageTakenMultiplier(level);
+}
+
+// Player tech — blasts, turret bolts, arcs, lances, frost, mines — used to
+// ignore armor completely, which meant a monster's level bought it nothing
+// against the things actually trying to kill it: a level-203 zombie has 203
+// HP and died to a 28.5-damage bolt in 8 shots, exactly like a level-20 one
+// would relative to its own pool.
+//
+// Tech now gets its own, deliberately GENTLER curve. Same shape (log decay,
+// asymptotic to zero, never reaching it) so towers never become ornaments.
+//
+// The PIVOT is what keeps this off the early game's back: dividing by 20
+// before the log means the curve is nearly flat through the levels a player
+// meets in the first minutes (a level-5 zombie shrugs off 10%, a level-10
+// one 17%) and only bites once the horde is deep into triple digits. Tuned
+// so a level-203 target takes ~0.45 of each hit — ~16 bolts from a
+// 28.5-damage turret instead of ~8, which is the ask that produced it.
+export const TECH_ARMOR_K = 0.5;
+export const TECH_ARMOR_PIVOT = 20;
+
+// Anchored on (level - 1), so level 1 is EXACTLY 1.0 rather than 0.976.
+// That precision matters more than it looks: a level-1 zombie has exactly
+// 1 HP and the weakest blast deals exactly 1 damage, so a multiplier a hair
+// under 1 would leave every runt alive on 0.02 HP.
+export function techDamageMultiplier(level) {
+  return 1 / (1 + TECH_ARMOR_K * Math.log1p(Math.max(0, level - 1) / TECH_ARMOR_PIVOT));
+}
+
+// Damage one armor-ignoring-in-name-only player hit actually deals.
+export function effectiveTechDamage(damage, targetLevel) {
+  return damage * techDamageMultiplier(targetLevel);
 }
 
 // Linear, uncapped: x1 at level 1, +speedPerLevel per level after.

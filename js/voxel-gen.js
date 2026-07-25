@@ -1451,7 +1451,7 @@ function slowFactorAt(x, z) {
 
 /* ---------- mines: buried one-shot area denial ---------- */
 
-const MINE_TRIGGER = 1.2, MINE_BLAST = 2.5, MINE_DMG = 3; // flat, armor-ignoring
+const MINE_TRIGGER = 1.2, MINE_BLAST = 2.5, MINE_DMG = 3; // before tech armor
 
 // Buried on the approach ring (between turret ring and map): random angle,
 // radius 4-7 from the Heart, so a minefield builds up organically.
@@ -1493,11 +1493,11 @@ function updateMines() {
     mines.splice(i, 1);
     spawnEatFx(mine.x, heightAt(mine.x, mine.z) + 1, mine.z);
     shake = Math.min(4.5, shake + 0.6);
-    // Flat armor-ignoring area damage; any deaths are player kills.
+    // Area damage, reduced by each target's tech armor; deaths are player kills.
     for (let j = monsters.length - 1; j >= 0; j--) {
       const m = monsters[j];
       if (Math.hypot(m.x - mine.x, m.z - mine.z) > MINE_BLAST) continue;
-      m.hp -= MINE_DMG;
+      m.hp -= techDamage(m, MINE_DMG);
       if (m.hp <= 0) killZombieByPlayer(m, "mine");
     }
   }
@@ -1520,8 +1520,9 @@ function updateMines() {
 // scale, 📡 stretches range by 2 blocks (and frost auras by 1.5), ⏩ shares
 // the Legacy Rapid Coils fire-rate scale.
 let turretDamageUps = 0, turretRangeUps = 0, turretRateUps = 0, boltSpeedUps = 0;
-// Flat, ignores zombie armor — towers are tech, like blasts. Overcharged
-// Turrets legacy ranks and in-run 🎯 picks both raise it.
+// Paper damage per hit, before the target's tech armor takes its share
+// (see techDamage). Overcharged Turrets legacy ranks and in-run 🎯 picks
+// both raise it.
 function turretRanks() { return legacy.turretRank + turretDamageUps; }
 function rateRanks() { return legacy.rateRank + turretRateUps; }
 function turretDmg() { return core.turretDamage(turretRanks()); }
@@ -1708,7 +1709,7 @@ function updateFrostTower(t, dt, frostR) {
   for (let i = monsters.length - 1; i >= 0; i--) {
     const m = monsters[i];
     if (Math.hypot(m.x - t.x, m.z - t.z) > frostR) continue;
-    m.hp -= dmg;
+    m.hp -= techDamage(m, dmg);
     if (m.hp <= 0) killZombieByPlayer(m, "turret");
   }
 }
@@ -1754,7 +1755,7 @@ function fireLance(t, target) {
     if (along < 0 || along > reach) continue;      // behind the tower / past its reach
     const off = Math.abs(rx * uz - rz * ux);       // perpendicular distance
     if (off > core.LANCE_WIDTH) continue;
-    m.hp -= dmg;
+    m.hp -= techDamage(m, dmg);
     if (m.hp <= 0) killZombieByPlayer(m, "turret");
   }
 }
@@ -1806,7 +1807,7 @@ function updateTurretBolts(dt) {
     const dist = Math.hypot(dx, dy, dz);
     const step = boltSpeed() * dt;
     if (dist <= Math.max(0.25, step)) {
-      b.target.hp -= b.damage;
+      b.target.hp -= techDamage(b.target, b.damage);
       root.remove(b.mesh);
       b.mesh.geometry.dispose();
       b.mesh.material.dispose();
@@ -1949,6 +1950,15 @@ const eatsNeededForLevel = core.eatsNeededForLevel;
 // whatever form it currently wears — and which form that is stays a pure
 // function of level, identical across breeds.
 function bodyScale(m) { return core.displayScale(m.stackLevel) * (m.arch?.scale ?? 1); }
+
+// EVERY player weapon lands through here — blasts, turret bolts, arcs,
+// lances, frost auras, mines. Tech no longer ignores a target's level: it
+// gets its own gentle logarithmic reduction (core.techDamageMultiplier), so
+// a triple-digit monster costs roughly twice the shots a same-damage hit
+// would need on a runt, and no amount of level ever makes one immune.
+function techDamage(m, amount) {
+  return core.effectiveTechDamage(amount, m.stackLevel);
+}
 
 const HP_BAR_W = 0.9, HP_BAR_H = 0.13;
 const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
@@ -2615,9 +2625,10 @@ function killMonstersNear(bx, bz, r) {
     const m = monsters[i];
     const d = Math.hypot(m.x - bx, m.z - bz);
     if (d > r + 1) continue;
-    // 1 outer / 2 core, times the blast-damage stat — a damage-built run
-    // one-shots stacks a radius-built run only chips (core.blastZombieDamage).
-    m.hp -= core.blastZombieDamage(d <= coreR, blastDamage);
+    // 1 outer / 2 core, times the blast-damage stat, then reduced by the
+    // target's tech armor — a damage-built run one-shots stacks a
+    // radius-built run only chips (core.blastZombieDamage).
+    m.hp -= techDamage(m, core.blastZombieDamage(d <= coreR, blastDamage));
     if (m.hp > 0) {
       spawnHitFlinch(m); // a tall stack survives a hit — knock it back and flash it
       continue;
@@ -3235,10 +3246,24 @@ function towerStatsHtml(t) {
     rows.push(["DPS", `${(turretDmg() / turretCooldown()).toFixed(2)}`]);
     rows.push(["Bolt speed", `${Math.round(boltSpeed())} blocks/s`]);
   }
+  // Paper damage is only half the story now that tech is armor-reduced —
+  // show what this tower actually lands on the toughest thing out there.
+  const worst = monsters.reduce((a, m) => (m.stackLevel > (a?.stackLevel ?? 0) ? m : a), null);
+  let vs = "";
+  if (worst && worst.stackLevel > 1) {
+    const base = t.kind === "frost" ? core.frostTickDamage(turretRanks())
+      : t.kind === "arc" ? core.arcDamage(turretRanks())
+      : t.kind === "lance" ? core.lanceDamage(turretRanks())
+      : turretDmg();
+    const landed = core.effectiveTechDamage(base, worst.stackLevel);
+    const pct = Math.round(core.techDamageMultiplier(worst.stackLevel) * 100);
+    vs = `<div class="tip-row"><span>vs Lv ${worst.stackLevel}</span><span>${landed.toFixed(2)} (${pct}%)</span></div>`;
+  }
   return `<div class="tip-title">${def.icon} ${def.name}</div>
     <div class="tip-desc">${def.desc}</div>
     ${rows.map(([k, v]) => `<div class="tip-row"><span>${k}</span><span>${v}</span></div>`).join("")}
-    <div class="tip-foot">Armor-ignoring · upgraded by 🎯 📡 ⏩ 🚀 picks</div>`;
+    ${vs}
+    <div class="tip-foot">High-level zombies shed some of every hit · upgraded by 🎯 📡 ⏩ 🚀</div>`;
 }
 
 // Raycast the cursor against the standing towers; show/hide the panel. Runs

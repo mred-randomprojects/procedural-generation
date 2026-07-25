@@ -36,7 +36,9 @@ A complete siege-defense game on procedurally generated voxel terrain:
   starts growing again. Late bosses arrive already transformed.
 - **Logarithmic armor** — level reduces incoming damage on a curve that
   flattens but never reaches zero, so nothing in the horde is ever immune
-  and a runt can wear down an elite given long enough.
+  and a runt can wear down an elite given long enough. Player tech (blasts,
+  towers, mines) runs a second, gentler curve: the early game barely feels
+  it, a level-200 monster costs about twice the shots.
 - **The Sanctuary** — nothing spawns on consecrated ground around the Heart,
   and the 🛡️ Ward buys more of it: you're paying for the horde's walk.
 - **The horde thickens** — every zombie you kill is replaced by 1.1 of
