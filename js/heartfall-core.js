@@ -106,13 +106,85 @@ export function craterBlockDamage(d, R, blastDamage = 1) {
 export function maxHpFor(level, hpPerLevel = 1) { return 1 + (level - 1) * hpPerLevel; }
 export function dpsFor(level, dmgPerLevel = 1) { return 1 + (level - 1) * dmgPerLevel; }
 
-// Flat armor against zombie-vs-zombie projectiles: a level-X zombie shrugs
-// off X-2 points of incoming DPS. Player blasts/turrets/mines ignore it.
-export function defenseFor(level) { return Math.max(0, level - 2); }
+/* ---------- armor: logarithmic damage reduction ---------- */
+// Armor used to be FLAT subtraction (a level-X zombie shrugged off X-2 DPS),
+// which had a hard failure mode: any attacker whose DPS didn't clear the
+// threshold dealt literally nothing, so runts couldn't scratch an elite at
+// all and the horde's own evolution stalled behind an invulnerability wall.
+//
+// It's now a multiplier that decays logarithmically — steep at first, then
+// ever shallower, and asymptotically approaching (but never reaching) zero.
+// A level-1000 monster still takes damage from a level-1 runt; it just takes
+// a very long time. Player blasts/turrets/mines ignore armor entirely.
+// 0.5 keeps mid-level elites roughly as tanky as the old flat rule made
+// them (a level 10 sheds ~53% instead of ~80%) while removing the wall:
+// equal-level fights now resolve in seconds rather than grinding.
+export const ARMOR_K = 0.5;
+
+// Share of incoming damage that actually lands, in (0, 1].
+export function damageTakenMultiplier(level) {
+  return 1 / (1 + ARMOR_K * Math.log(Math.max(1, level)));
+}
+
+// The same number as a percentage reduction, for HUD readouts. 0 at level 1.
+export function armorReduction(level) {
+  return 1 - damageTakenMultiplier(level);
+}
 
 // Linear, uncapped: x1 at level 1, +speedPerLevel per level after.
 export function stackSpeed(level, speedPerLevel = 0.3) { return 1 + (level - 1) * speedPerLevel; }
+
+// The raw size ladder — still linear and still uncapped. Nothing renders
+// this directly any more; evolutionOf() folds it into a form + a drawn size.
 export function stackScale(level) { return 1 + (level - 1) * 0.3; }
+
+/* ---------- evolution forms: size wraps, power doesn't ---------- */
+// USER-DIRECTED: a zombie's DRAWN size is capped at ×5. The stat ladder
+// above keeps climbing forever, but the moment the raw scale would exceed
+// the cap the creature METAMORPHOSES — it re-forms into the next, scarier
+// body plan at a smaller drawn size and starts growing again. So the
+// silhouette stays legible on screen while strength escalates without end;
+// what tells you a monster is terrifying is now its FORM, not its bulk.
+//
+// Each wrap re-bases the drawn scale from the cap down to EVOLUTION_TIER_FLOOR
+// (higher forms are born chunkier than a fresh walker, so a metamorphosis
+// reads as a change of kind rather than a demotion). Because the re-basing
+// is a constant ratio, each form lasts ~2.8× longer in raw-scale terms than
+// the one before: tier 1 near level 15, tier 2 near 44, tier 3 near 126…
+
+export const EVOLUTION_SCALE_CAP = 5;
+export const EVOLUTION_TIER_FLOOR = 1.8;
+
+// Body plans. Beyond the last entry the form repeats — but `tier` keeps
+// counting, and the renderer escalates its glow with it, so there is no
+// point at which a monster stops looking more dangerous.
+export const EVOLUTION_FORMS = [
+  { tier: 0, key: "walker", icon: "🧟", name: "Walker", desc: "The baseline shambler" },
+  { tier: 1, key: "revenant", icon: "👹", name: "Revenant", desc: "Horned, hunched, eyes lit from within" },
+  { tier: 2, key: "colossus", icon: "💀", name: "Colossus", desc: "Plated shoulders and a crown of spines" },
+  { tier: 3, key: "abomination", icon: "🕷️", name: "Abomination", desc: "Four arms around a burning core" },
+];
+
+// { tier, scale } for a stack level: `tier` selects the body plan, `scale`
+// is what actually gets drawn and always lands in [1, EVOLUTION_SCALE_CAP).
+export function evolutionOf(level) {
+  let scale = stackScale(level);
+  let tier = 0;
+  while (scale >= EVOLUTION_SCALE_CAP) {
+    scale = EVOLUTION_TIER_FLOOR * (scale / EVOLUTION_SCALE_CAP);
+    tier++;
+  }
+  return { tier, scale };
+}
+
+export function evolutionTier(level) { return evolutionOf(level).tier; }
+export function displayScale(level) { return evolutionOf(level).scale; }
+
+// The body plan drawn for a tier — clamped to the last authored form, while
+// the tier number itself keeps rising (see the note above).
+export function evolutionForm(tier) {
+  return EVOLUTION_FORMS[Math.min(tier, EVOLUTION_FORMS.length - 1)];
+}
 
 // Odd numbers: 1, 3, 5, 7… — eats required to advance from `level`.
 export function eatsNeededForLevel(level) { return 2 * level - 1; }
@@ -121,9 +193,10 @@ export function eatsNeededForLevel(level) { return 2 * level - 1; }
 // the interval so true DPS is exactly dpsFor(level) at any cadence.
 export function attackInterval(level, atkPerLevel = 0.25) { return 1.0 / (1 + atkPerLevel * (level - 1)); }
 
-// Damage one projectile deals after the target's flat armor.
+// Damage one projectile deals after the target's armor. Strictly positive
+// for any positive dps — nothing in the horde is ever fully immune.
 export function effectiveHitDamage(dps, interval, targetLevel) {
-  return Math.max(0, (dps - defenseFor(targetLevel)) * interval);
+  return Math.max(0, dps * interval * damageTakenMultiplier(targetLevel));
 }
 
 /* ---------- zombie archetypes: breeds within the horde ---------- */
@@ -354,6 +427,15 @@ export function frostTickDamage(ranks) { return turretDamage(ranks) * FROST_DAMA
 // bolt-turret cooldowns winding the shot up.
 export function lanceDamage(ranks) { return turretDamage(ranks) * LANCE_DAMAGE_FACTOR; }
 export function lanceCooldown(ranks = 0) { return towerCooldown(ranks) * LANCE_COOLDOWN_FACTOR; }
+
+/* ---------- zombie projectile speed ---------- */
+// A zombie's bile shot flies faster the stronger it is: a high-level
+// attacker's fire should feel like fire, not like a lobbed balloon you can
+// walk out of. Linear and uncapped, like the rest of the horde's curves.
+export const ZOMBIE_BOLT_BASE_SPEED = 40;
+export function zombieBoltSpeed(level) {
+  return ZOMBIE_BOLT_BASE_SPEED * (1 + 0.08 * Math.max(0, level - 1));
+}
 
 /* ---------- bolt travel speed ---------- */
 // Blocks per second a tower projectile flies. Slow bolts miss fast movers

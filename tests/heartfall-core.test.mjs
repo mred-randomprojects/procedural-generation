@@ -131,9 +131,42 @@ test("condensation ratchets the spawn floor up, never down", () => {
 test("level-1 zombies are the anchor: 1 hp, 1 dps, no armor, speed 1", () => {
   assert.equal(core.maxHpFor(1), 1);
   assert.equal(core.dpsFor(1), 1);
-  assert.equal(core.defenseFor(1), 0);
-  assert.equal(core.defenseFor(2), 0);
+  assert.equal(core.damageTakenMultiplier(1), 1); // no reduction at all
+  assert.equal(core.armorReduction(1), 0);
   assert.equal(core.stackSpeed(1), 1);
+});
+
+test("armor reduces logarithmically and never reaches immunity", () => {
+  let prev = 1;
+  for (let lv = 2; lv <= 5000; lv++) {
+    const mult = core.damageTakenMultiplier(lv);
+    assert.ok(mult < prev, `level ${lv} must take less than ${lv - 1}`);
+    assert.ok(mult > 0, `level ${lv} must never be immune`);
+    prev = mult;
+  }
+  // Diminishing returns: the first ten levels of armor must buy more
+  // reduction than the next ninety, or it isn't logarithmic.
+  const early = core.armorReduction(10) - core.armorReduction(1);
+  const late = core.armorReduction(100) - core.armorReduction(10);
+  assert.ok(early > late);
+  // Even at levels no run will ever reach, damage still lands — and at
+  // levels runs DO reach, it lands at a workable rate.
+  assert.ok(core.damageTakenMultiplier(1e6) > 0);
+  assert.ok(core.damageTakenMultiplier(1000) > 0.15);
+  // Mid-level elites must still be meaningfully armored, or level stops
+  // mattering in zombie-vs-zombie fights at all.
+  assert.ok(core.armorReduction(10) > 0.4);
+});
+
+test("effectiveHitDamage is always positive: no attacker is ever shut out", () => {
+  // The old flat-armor rule zeroed this out entirely; a runt must now be
+  // able to wear an elite down, however slowly.
+  const runtVsElite = core.effectiveHitDamage(core.dpsFor(1), core.attackInterval(1), 100);
+  assert.ok(runtVsElite > 0);
+  // …but it must still be far worse than hitting an unarmored target.
+  const runtVsRunt = core.effectiveHitDamage(core.dpsFor(1), core.attackInterval(1), 1);
+  assert.ok(runtVsElite < runtVsRunt / 2);
+  assert.equal(core.effectiveHitDamage(0, 1, 5), 0); // no damage in, none out
 });
 
 test("stat curves respect their slider slopes", () => {
@@ -156,11 +189,52 @@ test("attackInterval shrinks with level but DPS stays exact", () => {
   }
 });
 
-test("effectiveHitDamage floors at zero: runts cannot scratch elites", () => {
-  const dmg = core.effectiveHitDamage(core.dpsFor(1), core.attackInterval(1), 10);
-  assert.equal(dmg, 0);
-  const even = core.effectiveHitDamage(core.dpsFor(3), core.attackInterval(3), 1);
-  assert.ok(even > 0);
+test("armor still makes level a real advantage in a fight", () => {
+  // Same shooter, tougher target: strictly less damage lands.
+  const vsWeak = core.effectiveHitDamage(core.dpsFor(3), core.attackInterval(3), 1);
+  const vsStrong = core.effectiveHitDamage(core.dpsFor(3), core.attackInterval(3), 12);
+  assert.ok(vsStrong < vsWeak);
+  assert.ok(vsStrong > 0);
+});
+
+/* ---------- evolution forms ---------- */
+
+test("drawn size is capped at ×5 and wraps into the next form", () => {
+  for (let lv = 1; lv <= 4000; lv++) {
+    const { tier, scale } = core.evolutionOf(lv);
+    assert.ok(scale < core.EVOLUTION_SCALE_CAP, `level ${lv} drew at ${scale}`);
+    assert.ok(scale >= 1, `level ${lv} drew at ${scale}`);
+    assert.ok(Number.isInteger(tier) && tier >= 0);
+    // Anything that has metamorphosed is born chunkier than a fresh walker.
+    if (tier > 0) assert.ok(scale >= core.EVOLUTION_TIER_FLOOR - 1e-9, `tier ${tier} at ${scale}`);
+  }
+});
+
+test("tiers only ever climb with level, and the ladder never stalls", () => {
+  let prevTier = 0;
+  for (let lv = 1; lv <= 4000; lv++) {
+    const tier = core.evolutionTier(lv);
+    assert.ok(tier >= prevTier, `level ${lv} regressed from tier ${prevTier}`);
+    prevTier = tier;
+  }
+  assert.equal(core.evolutionTier(1), 0);
+  assert.ok(core.evolutionTier(15) >= 1); // the first metamorphosis
+  assert.ok(core.evolutionTier(4000) > core.evolutionTier(400)); // no ceiling
+});
+
+test("within one tier the drawn size still grows with level", () => {
+  for (let lv = 2; lv <= 400; lv++) {
+    const a = core.evolutionOf(lv - 1), b = core.evolutionOf(lv);
+    if (a.tier === b.tier) assert.ok(b.scale > a.scale, `level ${lv} did not grow`);
+  }
+});
+
+test("every tier resolves to an authored body plan", () => {
+  assert.equal(core.evolutionForm(0).key, "walker");
+  const last = core.EVOLUTION_FORMS[core.EVOLUTION_FORMS.length - 1];
+  assert.equal(core.evolutionForm(99).key, last.key); // repeats, never undefined
+  for (const f of core.EVOLUTION_FORMS) assert.ok(f.icon && f.name && f.desc, f.key);
+  assert.equal(new Set(core.EVOLUTION_FORMS.map((f) => f.key)).size, core.EVOLUTION_FORMS.length);
 });
 
 /* ---------- waves & bosses ---------- */
@@ -274,6 +348,18 @@ test("lance towers pay for their unbounded pierce in cadence and per-body damage
   assert.ok(perBodyDps * 3 < boltDps);
   assert.ok(perBodyDps * 4 > boltDps);
   assert.ok(core.LANCE_WIDTH > 0);
+});
+
+test("zombie bile flies faster the stronger the shooter", () => {
+  assert.equal(core.zombieBoltSpeed(1), core.ZOMBIE_BOLT_BASE_SPEED);
+  let prev = core.zombieBoltSpeed(1);
+  for (let lv = 2; lv <= 500; lv++) {
+    const v = core.zombieBoltSpeed(lv);
+    assert.ok(v > prev, `level ${lv} must shoot faster than ${lv - 1}`);
+    prev = v;
+  }
+  // Fast enough to matter, but a level-1 shot must still be the slow one.
+  assert.ok(core.zombieBoltSpeed(20) > core.zombieBoltSpeed(1) * 2);
 });
 
 test("boltSpeed climbs forever and never stalls a shot", () => {

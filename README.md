@@ -30,6 +30,13 @@ A complete siege-defense game on procedurally generated voxel terrain:
 - **Four zombie breeds** — 🧟 Walkers, plus 🏃 Runners (fast, fragile),
   🪨 Brutes (slow walls) and 🧪 Spitters (siege the Heart from range). The
   mix diversifies wave after wave, forever.
+- **Metamorphosis** — a zombie's drawn size is capped at ×5; the stat ladder
+  isn't. A monster that outgrows the cap re-forms into a scarier body plan
+  instead of inflating — 👹 Revenant, 💀 Colossus, 🕷️ Abomination — and
+  starts growing again. Late bosses arrive already transformed.
+- **Logarithmic armor** — level reduces incoming damage on a curve that
+  flattens but never reaches zero, so nothing in the horde is ever immune
+  and a runt can wear down an elite given long enough.
 - **The Sanctuary** — nothing spawns on consecrated ground around the Heart,
   and the 🛡️ Ward buys more of it: you're paying for the horde's walk.
 - **Kill combos** — chained kills inside a rolling window (4s, widened by

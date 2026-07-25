@@ -139,7 +139,8 @@ let highlightGeo, highlightOuterMat, highlightCoreMat, hoverClientX = null, hove
 // The game's objective. Zombies gravitate toward it and shoot it with the
 // same projectiles they use on each other; when its HP reaches 0 the run
 // ends. `stackLevel: 1` makes it a valid projectile target with zero armor
-// (defenseFor(1) === 0) — every zombie can always hurt the Heart.
+// (core.armorReduction(1) === 0) — every zombie always hurts the Heart in
+// full, and armor never zeroes damage anywhere (see damageTakenMultiplier).
 /* ---------- Legacy: permanent cross-run progression ---------- */
 // Shards are earned every run (scaled by score) and spent on permanent
 // perks from the game-over screen. This is the "one more run" hook: every
@@ -502,18 +503,48 @@ function damageHeart(amount) {
 
 // Articulated voxel zombie: torso + head + pivoted arms/legs so they can
 // swing in a walk cycle, built from procedurally-painted pixel textures.
-function createZombieMesh(mats) {
+//
+// `tier` picks the BODY PLAN (core.EVOLUTION_FORMS): since drawn size is now
+// capped at ×5, a monster that outgrows the cap metamorphoses instead of
+// continuing to inflate, and what tells you it's dangerous is its shape.
+// Each plan is built from the same voxel vocabulary as the walker (boxes,
+// cones, one glowing core) so nothing looks imported from another game, and
+// every plan keeps the same four pivots so the walk cycle is plan-agnostic.
+//
+// Accent geometry/materials are unique per rig, so they're tracked in
+// `ownMats` and torn down by disposeRig.
+function createZombieMesh(mats, tier = 0) {
   const grp = new THREE.Group();
+  const ownMats = [];
+  const form = core.evolutionForm(tier);
 
-  const torsoGeo = new THREE.BoxGeometry(0.5, 0.65, 0.28);
+  // Higher tiers than the last authored plan keep escalating their glow, so
+  // a tier-7 Abomination still reads as worse than a tier-3 one.
+  const overTier = Math.max(0, tier - (core.EVOLUTION_FORMS.length - 1));
+  const glow = Math.min(3, 1 + overTier * 0.5);
+
+  // Accent material for horns, plates, spines and cores: emissive so the
+  // silhouette stays readable against dark terrain at any zoom.
+  function accent(color, emissive) {
+    const m = new THREE.MeshLambertMaterial({ color, emissive, emissiveIntensity: glow });
+    ownMats.push(m);
+    return m;
+  }
+
+  const heavy = form.key === "colossus" || form.key === "abomination";
+  const torsoW = heavy ? 0.68 : form.key === "revenant" ? 0.46 : 0.5;
+  const torsoH = heavy ? 0.72 : 0.65;
+  const armLen = form.key === "revenant" ? 0.72 : 0.55;
+
+  const torsoGeo = new THREE.BoxGeometry(torsoW, torsoH, heavy ? 0.36 : 0.28);
   const headGeo = new THREE.BoxGeometry(0.42, 0.42, 0.42);
-  const armGeo = new THREE.BoxGeometry(0.16, 0.55, 0.16);
-  const legGeo = new THREE.BoxGeometry(0.18, 0.6, 0.18);
+  const armGeo = new THREE.BoxGeometry(heavy ? 0.22 : 0.16, armLen, heavy ? 0.22 : 0.16);
+  const legGeo = new THREE.BoxGeometry(heavy ? 0.26 : 0.18, 0.6, heavy ? 0.26 : 0.18);
 
-  const hipY = 0.6, shoulderY = hipY + 0.65, headY = shoulderY + 0.21;
+  const hipY = 0.6, shoulderY = hipY + torsoH, headY = shoulderY + 0.21;
 
   const torso = new THREE.Mesh(torsoGeo, mats.clothes);
-  torso.position.set(0, hipY + 0.325, 0);
+  torso.position.set(0, hipY + torsoH / 2, 0);
   grp.add(torso);
 
   // head faces +z; front face gets the eyes/mouth texture, rest get skin
@@ -522,9 +553,9 @@ function createZombieMesh(mats) {
   head.position.set(0, headY, 0);
   grp.add(head);
 
-  function makeLimb(geo, mat, side, pivotY, length) {
+  function makeLimb(geo, mat, side, pivotY, length, spread) {
     const pivot = new THREE.Group();
-    pivot.position.set(side * 0.17 * (geo === armGeo ? 1.9 : 0.8), pivotY, 0);
+    pivot.position.set(side * spread, pivotY, 0);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(0, -length / 2, 0);
     pivot.add(mesh);
@@ -532,19 +563,134 @@ function createZombieMesh(mats) {
     return pivot;
   }
 
-  const armL = makeLimb(armGeo, mats.skin, -1, shoulderY, 0.55);
-  const armR = makeLimb(armGeo, mats.skin, 1, shoulderY, 0.55);
-  const legL = makeLimb(legGeo, mats.clothes, -1, hipY, 0.6);
-  const legR = makeLimb(legGeo, mats.clothes, 1, hipY, 0.6);
+  const armSpread = torsoW / 2 + (heavy ? 0.13 : 0.09);
+  const armL = makeLimb(armGeo, mats.skin, -1, shoulderY, armLen, armSpread);
+  const armR = makeLimb(armGeo, mats.skin, 1, shoulderY, armLen, armSpread);
+  const legL = makeLimb(legGeo, mats.clothes, -1, hipY, 0.6, torsoW * 0.28);
+  const legR = makeLimb(legGeo, mats.clothes, 1, hipY, 0.6, torsoW * 0.28);
 
   armL.rotation.x = armR.rotation.x = -1.15; // zombie arms-forward idle pose
 
-  return { root: grp, armL, armR, legL, legR };
+  // ---- per-form ornaments ----
+
+  if (form.key === "revenant") {
+    // Horns and a hunch: the first thing that stops being a person.
+    const hornMat = accent(0x2a1a26, 0xff4a2a);
+    for (const side of [-1, 1]) {
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.34, 5), hornMat);
+      horn.position.set(side * 0.15, headY + 0.32, -0.02);
+      horn.rotation.z = side * 0.42;
+      grp.add(horn);
+    }
+    const mantle = new THREE.Mesh(new THREE.BoxGeometry(torsoW + 0.22, 0.12, 0.36), accent(0x1d1420, 0x3a0f22));
+    mantle.position.set(0, shoulderY + 0.02, 0);
+    grp.add(mantle);
+    torso.rotation.x = 0.16; // hunched forward
+  }
+
+  if (heavy) {
+    // Plated shoulders and a crown of spines: a siege engine with a face.
+    const plateMat = accent(0x2f3a46, 0x1a3a4e);
+    for (const side of [-1, 1]) {
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.4), plateMat);
+      pad.position.set(side * (torsoW / 2 + 0.06), shoulderY - 0.02, 0);
+      grp.add(pad);
+    }
+    const spineMat = accent(0x1a2028, 0xff7a2a);
+    for (let i = -2; i <= 2; i++) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.26, 4), spineMat);
+      spike.position.set(i * 0.11, headY + 0.26, -0.04);
+      spike.rotation.z = i * 0.16;
+      grp.add(spike);
+    }
+  }
+
+  if (form.key === "abomination") {
+    // A second pair of arms and a burning core — the point at which the
+    // thing stops pretending to have been human.
+    const lowerY = hipY + torsoH * 0.42;
+    const armL2 = makeLimb(armGeo, mats.skin, -1, lowerY, armLen, armSpread + 0.06);
+    const armR2 = makeLimb(armGeo, mats.skin, 1, lowerY, armLen, armSpread + 0.06);
+    armL2.rotation.x = -0.5; armR2.rotation.x = -0.5;
+    armL2.rotation.z = -0.35; armR2.rotation.z = 0.35;
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xffb040, transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    ownMats.push(coreMat);
+    const heart2 = new THREE.Mesh(new THREE.OctahedronGeometry(0.17), coreMat);
+    heart2.position.set(0, hipY + torsoH * 0.65, 0.2);
+    grp.add(heart2);
+  }
+
+  return { root: grp, armL, armR, legL, legR, tier, ownMats };
+}
+
+// Tears down one rig's geometry and its per-rig accent materials. The
+// skin/face/clothes materials are NOT touched here: they belong to the
+// monster (see disposeZombieMaterials) and survive a metamorphosis.
+function disposeRig(rig) {
+  if (!rig) return;
+  rig.root.traverse((o) => o.geometry?.dispose?.());
+  for (const m of rig.ownMats || []) m.dispose();
+}
+
+/* ---------- metamorphosis ---------- */
+// The moment a monster's level pushes its drawn size past the ×5 cap, it
+// doesn't get bigger — it becomes something else (core.evolutionOf). This
+// is called after every level-up; it's a no-op until a tier boundary is
+// crossed, and then it re-forms the body, burns a shockwave, and announces
+// the first sighting of each form in the run.
+let formsSeenThisRun = new Set();
+let lastMetamorphToast = -Infinity;
+
+function maybeMetamorphose(m) {
+  if (!m || !monsters.includes(m)) return;
+  const tier = core.evolutionTier(m.stackLevel);
+  if (tier === m.tier) return;
+  m.tier = tier;
+  remeshZombie(m, tier);
+  m.eatPulse = 0.3;
+  const form = core.evolutionForm(tier);
+  spawnEatFx(m.x, heightAt(m.x, m.z) + 1, m.z);
+  shake = Math.min(4.5, shake + 0.5);
+  // Loud once per form per run: a wall of banners would be noise, but the
+  // first Colossus of a run genuinely is the news of the minute.
+  if (!formsSeenThisRun.has(form.key)) {
+    formsSeenThisRun.add(form.key);
+    playBossSpawn();
+    showBanner("mut", "🧬 METAMORPHOSIS", `${form.icon} ${form.name}`,
+      `${form.desc} — a level ${m.stackLevel} zombie has outgrown its body`);
+  } else {
+    // Throttled: deep in a run dozens of zombies cross a tier in the same
+    // minute, and a toast per body would strobe the HUD into uselessness.
+    const now = performance.now() / 1000;
+    if (now - lastMetamorphToast > 6) {
+      lastMetamorphToast = now;
+      showToast(`${form.icon} A zombie re-forms into a ${form.name}!`);
+    }
+  }
+  updateZombieBoard();
+}
+
+// A monster has outgrown its body plan: swap the rig in place, keeping its
+// position, facing and animation phase. Called from the level-up path.
+function remeshZombie(m, tier) {
+  const prev = m.rig;
+  monsterGroup.remove(prev.root);
+  disposeRig(prev);
+  m.rig = createZombieMesh(m.mats, tier);
+  monsterGroup.add(m.rig.root);
+  m.rig.root.position.copy(prev.root.position);
+  m.rig.root.rotation.y = m.angle;
+  m.rig.root.scale.copy(prev.root.scale);
 }
 
 function spawnMonsters(biome, heights, seed) {
   if (monsterGroup) {
-    for (const m of monsters) disposeZombieMaterials(m.mats);
+    // clearGroup disposes geometry and top-level materials, but a rig's
+    // accent materials hang off nested meshes — disposeRig gets those.
+    for (const m of monsters) { disposeRig(m.rig); disposeZombieMaterials(m.mats); }
     clearGroup(monsterGroup);
     clearGroup(monsterUiGroup);
   }
@@ -576,7 +722,7 @@ function spawnMonsters(biome, heights, seed) {
       hp: 1, stackLevel: 1, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
       // The idle world that greets the player is plain walkers — breeds are
       // an escalation the waves bring in (see core.rollArchetype).
-      arch: core.ARCHETYPES.walker, frostTick: 0,
+      arch: core.ARCHETYPES.walker, frostTick: 0, tier: 0,
       ...initVerticalState(x, z),
       ...createMonsterUi(),
     });
@@ -594,7 +740,9 @@ function spawnZombieAt(x, z, level = 1, isBoss = false, arch = null) {
   const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
   const breed = arch || (isBoss ? core.ARCHETYPES.walker : core.rollArchetype(waveNumber));
   tintZombie(mats, breed);
-  const rig = createZombieMesh(mats);
+  // A high-level spawn (condensation, a boss) is BORN in its evolved form.
+  const tier = core.evolutionTier(level);
+  const rig = createZombieMesh(mats, tier);
   monsterGroup.add(rig.root);
   // Bosses stalk rather than sprint — their level's full stackSpeed would be
   // comical, so it's damped (core.BOSS_SPEED_FACTOR).
@@ -610,6 +758,7 @@ function spawnZombieAt(x, z, level = 1, isBoss = false, arch = null) {
     walkPhase: Math.random() * Math.PI * 2,
     hp: 1, stackLevel: level, eatXp: 0, eatPulse: 0, fightTarget: null, attackTimer: 0,
     frostTick: 0, // seconds until this body takes its next chill tick
+    tier, // body plan currently rendered — see remeshZombie
     ...initVerticalState(x, z),
     ...createMonsterUi(),
   };
@@ -774,6 +923,7 @@ function checkCondensation() {
     const doomed = new Set(group);
     for (const m of group) {
       monsterGroup.remove(m.rig.root);
+      disposeRig(m.rig);
       disposeZombieMaterials(m.mats);
       disposeMonsterUi(m);
     }
@@ -1077,6 +1227,7 @@ function resetRun() {
   turretRateUps = 0;
   boltSpeedUps = 0;
   breedsSeen = new Set();
+  formsSeenThisRun = new Set();
   maxUnlockedBlast = STARTING_MAX_BLAST + legacy.blastRank; // Demolitionist legacy perk
   blastDamage = core.STARTING_BLAST_DAMAGE + legacy.damageRank; // Heavy Ordnance legacy perk
   upgradesEarned = 0;
@@ -1652,6 +1803,7 @@ function onBossKilledByPlayer(m) {
 function killZombieByPlayer(m, source = "turret") {
   if (!monsters.includes(m)) return;
   monsterGroup.remove(m.rig.root);
+  disposeRig(m.rig);
   disposeZombieMaterials(m.mats);
   disposeMonsterUi(m);
   spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
@@ -1676,7 +1828,6 @@ function killZombieByPlayer(m, source = "turret") {
   updateZombieBoard();
 }
 
-const stackScale = core.stackScale;
 /* ---------- live-tweakable sim knobs (⚙️ Tweaks panel in the HUD) ---------- */
 // Canonical (ranked) values live in core.CANONICAL_TWEAKS — tested — and
 // every slider snaps back to them on scored runs via resetTweaksToDefaults.
@@ -1748,14 +1899,19 @@ function applyMode() {
 // Runner is paper at the very same level.
 function maxHpFor(m) { return core.maxHpFor(m.stackLevel, hpPerLevel) * mut.hpMul * (m.arch?.hp ?? 1); }
 function dpsFor(level) { return core.dpsFor(level, dmgPerLevel) * mut.dmgMul; }
-const defenseFor = core.defenseFor;
 function stackSpeed(level) { return core.stackSpeed(level, speedPerLevel) * mut.speedMul; }
 const eatsNeededForLevel = core.eatsNeededForLevel;
 
-// Rendered body size: the level curve times the breed's build. Visual only —
-// it deliberately never feeds blast radii or targeting, so what you aim at
-// is what you hit.
-function bodyScale(m) { return stackScale(m.stackLevel) * (m.arch?.scale ?? 1); }
+// Rendered body size: the CAPPED evolution ladder (core.evolutionOf — a
+// monster metamorphoses instead of growing past ×5) times the breed's build.
+// Reach and hp-bar height read this too, so what a monster can touch always
+// matches how big it looks; blast radii and targeting deliberately don't, so
+// what you aim at is still exactly what you hit.
+// The breed multiplier rides on top of the cap deliberately: it's a fixed
+// ±35% build, not a growth term, so a Brute is simply a chunkier example of
+// whatever form it currently wears — and which form that is stays a pure
+// function of level, identical across breeds.
+function bodyScale(m) { return core.displayScale(m.stackLevel) * (m.arch?.scale ?? 1); }
 
 const HP_BAR_W = 0.9, HP_BAR_H = 0.13;
 const HP_BAR_INNER_W = 0.8, HP_BAR_INNER_H = 0.08;
@@ -1882,7 +2038,9 @@ function fireZombieProjectile(shooter, target) {
     // updateZombieProjectiles.
     dps: dpsFor(level) * (shooter.arch?.dmg ?? 1),
     interval: attackInterval(level),
-    speed: 40, // super fast — reads as a shot, not a lobbed balloon
+    // Scales with the shooter's level: an elite's fire should read as fire,
+    // not as a lobbed balloon you can stroll out of the way of.
+    speed: core.zombieBoltSpeed(level),
   });
 }
 
@@ -1904,10 +2062,10 @@ function updateZombieProjectiles(dt) {
     const dist = Math.hypot(dx, dy, dz);
     const step = p.speed * dt;
     if (dist <= Math.max(0.25, step)) {
-      // Hit: damage after the target's flat armor (defenseFor, in DPS
-      // terms — an attacker whose DPS doesn't clear it deals nothing),
-      // then resolve a possible kill. The Heart's stackLevel of 1 gives it
-      // zero armor, so every zombie always chips it.
+      // Hit: damage after the target's armor — a logarithmic reduction
+      // (core.damageTakenMultiplier) that always leaves something landing,
+      // so no target is ever fully immune. The Heart's stackLevel of 1
+      // gives it no reduction at all, so every zombie chips it in full.
       const effDmg = core.effectiveHitDamage(p.dps, p.interval, p.target.stackLevel);
       root.remove(p.mesh);
       p.mesh.geometry.dispose();
@@ -1938,6 +2096,7 @@ function updateZombieProjectiles(dt) {
 function resolveZombieKill(killer, loser) {
   const lx = loser.x, lz = loser.z;
   monsterGroup.remove(loser.rig.root);
+  disposeRig(loser.rig);
   disposeZombieMaterials(loser.mats);
   disposeMonsterUi(loser);
   monsters.splice(monsters.indexOf(loser), 1);
@@ -1974,6 +2133,7 @@ function resolveZombieKill(killer, loser) {
     // A breed is for life: a Runner that eats its way up is a faster level 9.
     killer.speed = (stackSpeed(killer.stackLevel) + Math.random() * 0.2) * (killer.arch?.speed ?? 1);
   }
+  maybeMetamorphose(killer);
   if (killer.stackLevel >= 5) unlockAchievement("evolved-5");
   if (killer.stackLevel >= 10) unlockAchievement("evolved-10");
   updateZombieBoard();
@@ -2017,12 +2177,38 @@ function updateZombieBoard() {
     ? `<div class="hud-board-row hud-board-floor"><span>⬆ Spawn floor</span><span>Lv ${minSpawnLevel}</span></div>`
     : "";
   if (levels.length === 0) {
-    el.innerHTML = `${floorRow}${breedRows()}${towerRows()}<div class="hud-board-empty">No zombies left</div>`;
+    el.innerHTML = `${floorRow}${formRows()}${breedRows()}${towerRows()}<div class="hud-board-empty">No zombies left</div>`;
     return;
   }
   el.innerHTML = floorRow + levels
     .map((lv) => `<div class="hud-board-row"><span>Lvl ${lv}</span><span>${counts.get(lv)}</span></div>`)
-    .join("") + breedRows() + towerRows();
+    .join("") + formRows() + breedRows() + towerRows();
+}
+
+// Which evolved forms are walking around. Only tiers past the plain walker
+// are listed — the point of the panel is "something out there has already
+// outgrown its body twice", which the level rows alone don't convey.
+function formRows() {
+  const counts = new Map();
+  let deepest = 0;
+  for (const m of monsters) {
+    const tier = m.tier || 0;
+    if (tier <= 0) continue;
+    if (tier > deepest) deepest = tier;
+    const form = core.evolutionForm(tier);
+    counts.set(form, (counts.get(form) || 0) + 1);
+  }
+  if (counts.size === 0) return "";
+  const rows = [...counts.entries()]
+    .map(([f, n]) => `<div class="hud-board-row"><span>${f.icon} ${f.name}</span><span>${n}</span></div>
+      <div class="hud-board-note">${f.desc}</div>`)
+    .join("");
+  // Past the last authored body plan the tier keeps counting (and glowing),
+  // so say which generation the worst thing on the field is on.
+  const gen = deepest >= core.EVOLUTION_FORMS.length
+    ? `<div class="hud-board-note">Deepest metamorphosis: generation ${deepest}</div>`
+    : "";
+  return `<div class="hud-board-head">Evolved forms</div>${rows}${gen}`;
 }
 
 // Which breeds are on the field right now, with what each one actually does
@@ -2377,6 +2563,7 @@ function killMonstersNear(bx, bz, r) {
       continue;
     }
     monsterGroup.remove(m.rig.root);
+    disposeRig(m.rig);
     disposeZombieMaterials(m.mats);
     disposeMonsterUi(m);
     spawnGibs(m.x, heightAt(m.x, m.z) + 0.9, m.z);
@@ -3717,6 +3904,7 @@ function init() {
   document.getElementById("vx-kill-all").addEventListener("click", () => {
     for (const m of monsters) {
       monsterGroup.remove(m.rig.root);
+      disposeRig(m.rig);
       disposeZombieMaterials(m.mats);
       disposeMonsterUi(m);
     }
