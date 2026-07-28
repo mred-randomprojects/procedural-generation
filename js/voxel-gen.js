@@ -112,6 +112,15 @@ let tintNoise = null; // smooth per-world noise field driving terrainTint below
 let damageAccum = null; // hit-points chipped into whatever block currently tops each column
 let currentSeed = "terra", monsterIdCounter = 0;
 let lastTime = 0;
+// The sim's own clock (seconds). Every gameplay system reads this instead of
+// performance.now() so the simulation stays coherent when it has to catch up
+// on time the browser didn't give us — a backgrounded tab freezes rAF and
+// throttles timers, but the world keeps running: on the next tick we replay
+// the missing seconds in fixed steps rather than swallowing them.
+let simClock = performance.now() / 1000;
+let simRealAnchor = simClock; // last real timestamp folded into the backlog
+let simBacklog = 0; // real seconds owed to the sim but not yet stepped
+const SIM_MAX_STEP = 0.05; // biggest dt a single sim step may see (unchanged from the old frame cap)
 let panHoldTime = 0;
 let maxUnlockedBlast = STARTING_MAX_BLAST;
 let blastDamage = core.STARTING_BLAST_DAMAGE;
@@ -204,7 +213,7 @@ loadStats();
 let runStatsFlushed = false;
 function flushRunStats() {
   if (runStatsFlushed || mode === "sandbox") return;
-  const now = performance.now() / 1000;
+  const now = simClock;
   // While paused, the pause span hasn't been folded into runStartTime yet.
   const survived = Math.max(0, (gameState === "paused" ? pauseStartedAt : now) - runStartTime);
   // A run with no kills and no waves never really started — the idle world
@@ -284,7 +293,7 @@ let runMaxCombo = 0;
 // multiplier those kills earn (the kills count toward their own combo, so
 // one huge blast pays out at its own full chain).
 function registerPlayerKills(kills) {
-  const now = performance.now() / 1000;
+  const now = simClock;
   combo = core.applyCombo(combo, kills, now, core.comboWindow(legacy.comboRank));
   if (combo.count > runMaxCombo) runMaxCombo = combo.count;
   if (combo.count >= 10) unlockAchievement("combo-10");
@@ -337,7 +346,7 @@ let lowestHeartFrac = 1; // the closest the Heart came to dying this run
 // the previous record — called from the score-changing paths, cheap.
 function maybeCelebrateNewBest() {
   if (newBestShown || mode === "sandbox" || bestAtRunStart <= 0 || gameState !== "playing") return;
-  const survived = performance.now() / 1000 - runStartTime;
+  const survived = simClock - runStartTime;
   if (runScore(survived) > bestAtRunStart) {
     newBestShown = true;
     showToast("🏆 NEW PERSONAL BEST!");
@@ -491,7 +500,7 @@ function damageHeart(amount) {
     clearTimeout(vignetteTimer);
     vignetteTimer = setTimeout(() => vignette.classList.remove("flash"), 90);
   }
-  const now = performance.now() / 1000;
+  const now = simClock;
   if (now - lastHeartHitSound > 0.35) {
     lastHeartHitSound = now;
     playHeartHit();
@@ -665,7 +674,7 @@ function maybeMetamorphose(m) {
   } else {
     // Throttled: deep in a run dozens of zombies cross a tier in the same
     // minute, and a toast per body would strobe the HUD into uselessness.
-    const now = performance.now() / 1000;
+    const now = simClock;
     if (now - lastMetamorphToast > 6) {
       lastMetamorphToast = now;
       showToast(`${form.icon} A zombie re-forms into a ${form.name}!`);
@@ -993,7 +1002,7 @@ let pendingSpawns = []; // due-timestamps (seconds, performance.now() clock)
 
 function queueZombieSpawn() {
   if (spawnDelay <= 0) { spawnRandomZombie(); return; }
-  pendingSpawns.push(performance.now() / 1000 + spawnDelay);
+  pendingSpawns.push(simClock + spawnDelay);
 }
 
 function processPendingSpawns(now) {
@@ -1057,7 +1066,7 @@ function runScore(survivalSeconds) {
 function endRun() {
   gameState = "over";
   updateUpgradeChooser(); // any banked-but-unspent points die with the run
-  const now = performance.now() / 1000;
+  const now = simClock;
   const survived = now - runStartTime;
   let maxLevel = 1;
   for (const m of monsters) if (m.stackLevel > maxLevel) maxLevel = m.stackLevel;
@@ -1246,7 +1255,7 @@ function resetRun() {
   waveNumber = 0;
   waveTimer = 18 * DIFFICULTIES[difficulty].wave;
   trickleTimer = 5 * DIFFICULTIES[difficulty].trickle;
-  runStartTime = performance.now() / 1000;
+  runStartTime = simClock;
   combo = { count: 0, expiresAt: -Infinity };
   runMaxCombo = 0;
   bossesKilledThisRun = 0;
@@ -1326,7 +1335,7 @@ function updateShopHud() {
   setBtn("vx-shop-arc", "vx-arc-cost", arcCost);
   setBtn("vx-shop-lance", "vx-lance-cost", lanceCost);
   setBtn("vx-shop-mine", "vx-mine-cost", mineCost);
-  setBtn("vx-shop-slow", "vx-slow-cost", slowCost, performance.now() / 1000 < slowUntil);
+  setBtn("vx-shop-slow", "vx-slow-cost", slowCost, simClock < slowUntil);
   setBtn("vx-shop-ward", "vx-ward-cost", wardCost);
 }
 
@@ -1417,7 +1426,7 @@ function buyMine() {
 }
 
 function buySlow() {
-  const now = performance.now() / 1000;
+  const now = simClock;
   if (gameState !== "playing" || energy < slowCost || now < slowUntil) return;
   energy -= slowCost;
   slowCost = core.nextShopCost(slowCost, "slow");
@@ -1442,7 +1451,7 @@ function buySlow() {
 // the stronger one wins.
 function slowFactorAt(x, z) {
   let factor = 1;
-  if (heart && performance.now() / 1000 < slowUntil && Math.hypot(x - heart.x, z - heart.z) < SLOW_RADIUS) {
+  if (heart && simClock < slowUntil && Math.hypot(x - heart.x, z - heart.z) < SLOW_RADIUS) {
     factor = Math.min(factor, SLOW_FACTOR);
   }
   if (inFrostAura(x, z)) factor = Math.min(factor, core.FROST_SLOW);
@@ -4039,10 +4048,21 @@ function init() {
   // context after an iOS audio-session interruption.
   window.addEventListener("pointerdown", unlockAudio);
 
-  // Real-game behavior: losing the tab/window (alt-tab, phone lock, Steam
-  // overlay) auto-pauses instead of letting the Heart die unattended.
+  // Backgrounding the tab does NOT pause: the siege keeps running while you're
+  // elsewhere. rAF stops dead in a hidden tab, so this timer takes over as the
+  // heartbeat — browsers throttle it hard (1/s, and 1/min after a few minutes),
+  // but pumpSim replays whatever real time elapsed, so the coarse cadence only
+  // affects how chunkily the world advances, never how much of it happens.
+  setInterval(() => {
+    if (document.hidden) pumpSim(performance.now() / 1000, 150);
+  }, 200);
+  // Either way (leaving or coming back) pump immediately: on the way out so no
+  // time is stranded, on the way back with a fatter slice than a normal frame
+  // allows, so a long absence starts catching up at once. syncMute inside the
+  // pump handles the audio side.
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden && gameState === "playing") togglePause();
+    if (document.hidden) replayingHidden = true;
+    pumpSim(performance.now() / 1000, document.hidden ? 20 : 50);
   });
 
   // Title screen: play, difficulty, settings — controls seeded from the
@@ -4147,26 +4167,9 @@ function regenerate(randomizeSeed) {
   target.set(GRID / 2, 0, GRID / 2);
 }
 
-function loop() {
-  requestAnimationFrame(loop);
-  const now = performance.now() / 1000;
-  const dt = lastTime ? Math.min(0.05, now - lastTime) : 0;
-  lastTime = now;
-
-  const panning = keys["w"] || keys["arrowup"] || keys["s"] || keys["arrowdown"] ||
-    keys["a"] || keys["arrowleft"] || keys["d"] || keys["arrowright"];
-  panHoldTime = panning ? panHoldTime + dt : 0;
-  const panRamp = Math.min(3.5, 1 + panHoldTime * 2.2); // accelerates the longer a key is held
-  const panSpeed = (16 / zoomLevel) * dt * panRamp;
-  const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
-  const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
-  if (keys["w"] || keys["arrowup"]) target.addScaledVector(fwd, -panSpeed);
-  if (keys["s"] || keys["arrowdown"]) target.addScaledVector(fwd, panSpeed);
-  if (keys["a"] || keys["arrowleft"]) target.addScaledVector(right, panSpeed);
-  if (keys["d"] || keys["arrowright"]) target.addScaledVector(right, -panSpeed);
-  // No pan bounds — see the mouse-pan handler for why.
-
-  shake *= Math.exp(-4.5 * dt);
+// One fixed-size slice of world time. Everything in here reads simClock, so
+// a replayed slice behaves exactly like a live frame.
+function stepSim(dt, now) {
   // On defeat or pause the sim freezes mid-tableau (no movement, fights,
   // spawns, or player shots) behind the overlay; camera stays free so the
   // frozen battlefield can still be orbited. Missiles/fx also freeze while
@@ -4200,7 +4203,69 @@ function loop() {
     updateMissiles(dt);
     updateFx(dt);
   }
-  updateComboHud(now);
+}
+
+// Advance the sim to (at most) real time. budgetMs bounds how long one pump
+// may spend so a long backlog is drained across several ticks instead of
+// locking the tab up; leftover time stays in simBacklog and is picked up by
+// the next pump, so nothing is ever discarded.
+function pumpSim(realNow, budgetMs) {
+  simBacklog += Math.max(0, realNow - simRealAnchor);
+  simRealAnchor = realNow;
+  // Nothing is simulating on the title screen, at game over, or while paused,
+  // so there is no lost time worth replaying — snap the clock forward (which
+  // keeps the pause bookkeeping honest) and animate one frame's worth.
+  if (gameState !== "playing") {
+    const dt = Math.min(SIM_MAX_STEP, simBacklog);
+    simClock += simBacklog;
+    simBacklog = 0;
+    stepSim(dt, simClock);
+    syncMute();
+    return;
+  }
+  const deadline = performance.now() + budgetMs;
+  while (simBacklog > 1e-4) {
+    const dt = Math.min(SIM_MAX_STEP, simBacklog);
+    simBacklog -= dt;
+    simClock += dt;
+    stepSim(dt, simClock);
+    if (performance.now() >= deadline) break;
+  }
+  syncMute();
+}
+
+// Silence while the tab is hidden (a background tab firing off explosions is
+// nobody's idea of fun) and while the time it missed is being replayed —
+// otherwise every catch-up second dumps its sounds at once. Keyed on having
+// actually been hidden, so a machine that merely runs behind stays audible.
+let replayingHidden = false;
+function syncMute() {
+  if (!document.hidden && simBacklog <= 0.5) replayingHidden = false;
+  setMasterVolume(document.hidden || replayingHidden ? 0 : settings.volume);
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  const now = performance.now() / 1000;
+  const dt = lastTime ? Math.min(0.05, now - lastTime) : 0;
+  lastTime = now;
+  pumpSim(now, 12); // ~12ms of sim per frame: keeps 60fps even while catching up
+
+  const panning = keys["w"] || keys["arrowup"] || keys["s"] || keys["arrowdown"] ||
+    keys["a"] || keys["arrowleft"] || keys["d"] || keys["arrowright"];
+  panHoldTime = panning ? panHoldTime + dt : 0;
+  const panRamp = Math.min(3.5, 1 + panHoldTime * 2.2); // accelerates the longer a key is held
+  const panSpeed = (16 / zoomLevel) * dt * panRamp;
+  const fwd = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
+  const right = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
+  if (keys["w"] || keys["arrowup"]) target.addScaledVector(fwd, -panSpeed);
+  if (keys["s"] || keys["arrowdown"]) target.addScaledVector(fwd, panSpeed);
+  if (keys["a"] || keys["arrowleft"]) target.addScaledVector(right, panSpeed);
+  if (keys["d"] || keys["arrowright"]) target.addScaledVector(right, -panSpeed);
+  // No pan bounds — see the mouse-pan handler for why.
+
+  shake *= Math.exp(-4.5 * dt);
+  updateComboHud(simClock);
   updateCamera();
   renderer.render(scene, camera);
 }
@@ -4314,7 +4379,7 @@ function restartRun() {
 let pauseStartedAt = 0;
 function togglePause() {
   if (gameState === "over" || gameState === "menu") return;
-  const now = performance.now() / 1000;
+  const now = simClock;
   if (gameState === "paused") {
     gameState = "playing";
     runStartTime += now - pauseStartedAt; // paused time doesn't count as survival
