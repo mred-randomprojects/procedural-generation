@@ -241,13 +241,20 @@ function heartMaxHp() {
   return core.heartMaxHp(legacy.heartRank, difficulty);
 }
 
-const settings = { volume: 1, shake: true };
+// autoRepair/autoRepairPct: buy a repair automatically the moment the Heart
+// falls below that share of its max HP (see maybeAutoRepair).
+const settings = { volume: 1, shake: true, autoRepair: false, autoRepairPct: 60 };
+const AUTO_REPAIR_MIN = 10, AUTO_REPAIR_MAX = 90; // matches the slider's range
 
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("vx-settings") || "{}");
     if (typeof saved.volume === "number") settings.volume = saved.volume;
     if (typeof saved.shake === "boolean") settings.shake = saved.shake;
+    if (typeof saved.autoRepair === "boolean") settings.autoRepair = saved.autoRepair;
+    if (Number.isFinite(saved.autoRepairPct)) {
+      settings.autoRepairPct = Math.min(AUTO_REPAIR_MAX, Math.max(AUTO_REPAIR_MIN, Math.round(saved.autoRepairPct)));
+    }
     if (DIFFICULTIES[saved.difficulty]) chosenDifficulty = saved.difficulty;
     if (saved.mode === "ranked" || saved.mode === "sandbox" || saved.mode === "daily") mode = saved.mode;
   } catch { /* defaults */ }
@@ -1374,6 +1381,17 @@ function buyRepair() {
   spawnEatFx(heart.x, heart.y + 1.2, heart.z); // reuse the flash/ring as a "heal burst"
   updateHeartHud();
   updateScoreHud();
+}
+
+// The Heart patches itself the instant it dips under the chosen share of max
+// HP — exactly the purchase the button makes (same escalating cost, same
+// first-repair bookkeeping for the no-repair contract), just without the
+// click. Self-limiting: one repair restores 30% of max, so a threshold under
+// 70% can't chain-drain your energy in a single moment.
+function maybeAutoRepair() {
+  if (!settings.autoRepair || !heart || energy < repairCost) return;
+  if (heart.hp / heartMaxHp() >= settings.autoRepairPct / 100) return;
+  buyRepair();
 }
 
 function buyTurret() {
@@ -4182,6 +4200,29 @@ function init() {
     saveSettings();
   });
 
+  // Auto-repair lives in the shop, next to the Repair it automates. Both
+  // controls persist, so a habitual threshold survives the run that set it.
+  const autoEl = document.getElementById("vx-autorepair-toggle");
+  const autoPctEl = document.getElementById("vx-autorepair-pct");
+  const autoValEl = document.getElementById("vx-autorepair-val");
+  const paintAutoRepair = () => {
+    autoEl.checked = settings.autoRepair;
+    autoPctEl.value = String(settings.autoRepairPct);
+    autoPctEl.disabled = !settings.autoRepair;
+    autoValEl.textContent = `${settings.autoRepairPct}%`;
+  };
+  autoEl.addEventListener("change", () => {
+    settings.autoRepair = autoEl.checked;
+    paintAutoRepair();
+    saveSettings();
+  });
+  autoPctEl.addEventListener("input", () => {
+    settings.autoRepairPct = Number(autoPctEl.value);
+    autoValEl.textContent = `${settings.autoRepairPct}%`;
+    saveSettings();
+  });
+  paintAutoRepair();
+
   regenerate(false);
   showTitle(); // first visit lands on the menu, world idling behind it
   requestAnimationFrame(loop);
@@ -4208,6 +4249,7 @@ function stepSim(dt, now) {
     updateZombieCombat(dt * simSpeed);
     updateTurrets(dt * simSpeed);
     updateMines();
+    maybeAutoRepair();
     processPendingSpawns(now);
     updateWaves(dt * simSpeed);
     updateMutations(dt * simSpeed);

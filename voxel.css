@@ -262,6 +262,24 @@ html, body {
 }
 .shop-cost { color: #ffcf5a; font-weight: 700; margin-left: 4px; }
 
+/* Auto-repair sits on its own full-width line under the shop buttons: right
+   beside the Repair it automates, without competing with the buttons for
+   room in the row (or, on a phone, for a grid cell). */
+.shop-auto {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #b8f5c9;
+  cursor: pointer;
+  user-select: none;
+}
+.shop-auto input[type="checkbox"] { width: 15px; height: 15px; accent-color: #2e9650; cursor: pointer; }
+.shop-auto-label { white-space: nowrap; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.shop-auto input[type="range"] { flex: 1; min-width: 70px; max-width: 220px; accent-color: #2e9650; cursor: pointer; }
+.shop-auto-val { color: #ffcf5a; font-weight: 700; min-width: 34px; text-align: right; }
+
 #vx-gameover {
   position: absolute;
   inset: 0;
@@ -1116,7 +1134,9 @@ input, select { -webkit-user-select: text; user-select: text; }
     min-height: 44px;
   }
   .hud-slider-inner input[type="range"],
+  .shop-auto input[type="range"],
   .title-settings input[type="range"] { min-height: 34px; }
+  .shop-auto input[type="checkbox"] { width: 20px; height: 20px; }
   .title-settings { flex-wrap: wrap; }
 }
 
@@ -1231,6 +1251,7 @@ input, select { -webkit-user-select: text; user-select: text; }
     padding: 7px;
   }
   #hud-shop button { padding: 8px 4px; font-size: 12px; }
+  .shop-auto { grid-column: 1 / -1; font-size: 11px; gap: 6px; }
   .shop-cost { margin-left: 2px; }
 
   #hud-hint {

@@ -114,6 +114,11 @@
     <button id="vx-shop-mine" data-tip="Mine — buried on the approach; the first zombie to step near it takes the whole blast">💣 Mine <span class="shop-cost" id="vx-mine-cost">40⚡</span></button>
     <button id="vx-shop-slow" data-tip="Slow — every zombie near the Heart crawls for 15 seconds">🧊 Slow <span class="shop-cost" id="vx-slow-cost">80⚡</span></button>
     <button id="vx-shop-ward" data-tip="Ward — widens the Sanctuary: no zombie may SPAWN inside that circle, so the horde has to walk in past your towers">🛡️ Ward <span class="shop-cost" id="vx-ward-cost">150⚡</span></button>
+    <div class="shop-auto">
+      <label class="shop-auto-label" data-tip="Auto-repair — the moment the Heart drops below this share of its maximum HP, a repair is bought for you if the energy is there. Exactly the purchase the button makes: same escalating cost, and it still counts as your first repair for the no-repair contract."><input type="checkbox" id="vx-autorepair-toggle" /> 🔁 Auto-repair below</label>
+      <input type="range" id="vx-autorepair-pct" min="10" max="90" step="5" value="60" aria-label="Auto-repair threshold" />
+      <span class="shop-auto-val" id="vx-autorepair-val">60%</span>
+    </div>
   </div>
 
   <div id="vx-tower-tip"></div>
