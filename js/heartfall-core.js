@@ -309,7 +309,7 @@ export const MUTATION_POOL = [
   { key: "regen", icon: "♻️", name: "Regeneration", desc: "Zombies knit back together (+0.5 HP/s)" },
   { key: "arms", icon: "🦑", name: "Long Arms", desc: "Zombies besiege the Heart from +35% farther" },
   { key: "volatile", icon: "☣️", name: "Volatile", desc: "Zombies destroyed near the Heart burst and harm it" },
-  { key: "bloom", icon: "🍄", name: "Corpse Bloom", desc: "Every devoured zombie lures +0.5 more to the field" },
+  { key: "bloom", icon: "🍄", name: "Corpse Bloom", desc: "Every zombie you destroy lures +0.5 more to the field" },
 ];
 
 // Seconds of sim time until the mutation AFTER `index` strikes: the first

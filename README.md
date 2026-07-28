@@ -20,9 +20,10 @@ isometric 3D). No build step beyond loading Three.js from a CDN.
 
 A complete siege-defense game on procedurally generated voxel terrain:
 
-- **The loop** — zombies invade in escalating waves and eat each other to
-  evolve; you call down missiles (destructible terrain, permanent craters),
-  raise towers, bury mines and trigger slow-fields to keep the Heart alive.
+- **The loop** — zombies invade in escalating waves as one army: they never
+  turn on each other, only on the Heart. You call down missiles (destructible
+  terrain, permanent craters), raise towers, bury mines and trigger
+  slow-fields to keep it alive.
 - **Four tower types** — 🗼 Bolt (single-target sniping), ❄️ Frost (a chill
   aura that slows and gnaws at everything inside it), ⚡ Arc (one shot forks
   through three bodies) and 🔱 Lance (a beam piercing an unbounded line).
@@ -33,7 +34,8 @@ A complete siege-defense game on procedurally generated voxel terrain:
 - **Metamorphosis** — a zombie's drawn size is capped at ×5; the stat ladder
   isn't. A monster that outgrows the cap re-forms into a scarier body plan
   instead of inflating — 👹 Revenant, 💀 Colossus, 🕷️ Abomination — and
-  starts growing again. Late bosses arrive already transformed.
+  starts growing again. Late bosses arrive already transformed, and the
+  horde reaches new forms through condensation.
 - **Logarithmic armor** — level reduces incoming damage on a curve that
   flattens but never reaches zero, so nothing in the horde is ever immune
   and a runt can wear down an elite given long enough. Player tech (blasts,
@@ -47,7 +49,7 @@ A complete siege-defense game on procedurally generated voxel terrain:
 - **Kill combos** — chained kills inside a rolling window (4s, widened by
   Legacy ranks) multiply every payout, uncapped.
 - **Boss waves** — every 5th wave lands a crowned colossus with an energy
-  bounty; let the horde eat it and its power passes on.
+  bounty — kill it before it reaches the Heart.
 - **Contracts** — three optional objectives per run paying instant energy
   plus banked shards.
 - **Modes** — 🏆 Ranked (scored, canonical balance), 📅 Daily Challenge

@@ -91,7 +91,10 @@ const DEPTH_SPARE = 5;
 // — total strength keeps escalating forever, only the entity count is tamed
 // so the renderer survives. Population totals remain uncapped.
 const MONSTER_COUNT = 9;
-const EAT_DIST = 0.85; // how close two zombies must be to fight (see updateZombieCombat)
+const EAT_DIST = 0.85; // how close a zombie must be to open fire (see updateZombieCombat)
+// Zombie-vs-zombie brawling, off at the user's direction: the horde only ever
+// shoots at the Heart. Flip to true to bring the eat/devour economy back.
+const ZOMBIE_INFIGHTING = false;
 const STARTING_MAX_BLAST = core.STARTING_MAX_BLAST;
 // XP thresholds bank upgrade POINTS; the player chooses each one's boon
 // (+1 radius or +1 damage). Costs escalate geometrically, no ceiling (core).
@@ -134,8 +137,8 @@ let lastBlastX = 0, lastBlastZ = 0;
 // The numeric side of core.MUTATION_POOL: multipliers layered onto the stat
 // wrappers below, plus the three "effect" mutations (regen ticks in
 // updateMonsters, volatile bursts in the death paths, bloom in
-// resolveZombieKill). Reset every run.
-let mut = { hpMul: 1, dmgMul: 1, speedMul: 1, regen: 0, reachMul: 1, volatile: 0, eatLure: 0 };
+// spawnsPerKillNow). Reset every run.
+let mut = { hpMul: 1, dmgMul: 1, speedMul: 1, regen: 0, reachMul: 1, volatile: 0, lure: 0 };
 let mutationsApplied = []; // core.MUTATION_POOL entries, in strike order
 let mutationCount = 0;
 let mutationTimer = Infinity; // sim-time countdown to the next strike
@@ -661,16 +664,25 @@ function maybeMetamorphose(m) {
   m.tier = tier;
   remeshZombie(m, tier);
   m.eatPulse = 0.3;
-  const form = core.evolutionForm(tier);
   spawnEatFx(m.x, heightAt(m.x, m.z) + 1, m.z);
   shake = Math.min(4.5, shake + 0.5);
+  announceForm(tier, m.stackLevel);
+  updateZombieBoard();
+}
+
+// The horde showing a new body plan is news however it got there — a zombie
+// re-forming in place (above) or, now that nothing eats its neighbours, a
+// condensation cohort born straight into the form (see notePeakLevel).
+function announceForm(tier, level) {
+  if (tier <= 0) return; // tier 0 is the plain walker — not an event
+  const form = core.evolutionForm(tier);
   // Loud once per form per run: a wall of banners would be noise, but the
   // first Colossus of a run genuinely is the news of the minute.
   if (!formsSeenThisRun.has(form.key)) {
     formsSeenThisRun.add(form.key);
     playBossSpawn();
     showBanner("mut", "🧬 METAMORPHOSIS", `${form.icon} ${form.name}`,
-      `${form.desc} — a level ${m.stackLevel} zombie has outgrown its body`);
+      `${form.desc} — a level ${level} zombie has outgrown its body`);
   } else {
     // Throttled: deep in a run dozens of zombies cross a tier in the same
     // minute, and a toast per body would strobe the HUD into uselessness.
@@ -680,7 +692,6 @@ function maybeMetamorphose(m) {
       showToast(`${form.icon} A zombie re-forms into a ${form.name}!`);
     }
   }
-  updateZombieBoard();
 }
 
 // A monster has outgrown its body plan: swap the rig in place, keeping its
@@ -927,9 +938,16 @@ let runPeakLevel = 1;
 function notePeakLevel(level) {
   if (level <= runPeakLevel) return;
   const beforeTier = core.spawnRateTier(runPeakLevel);
+  const beforeForm = core.evolutionTier(runPeakLevel);
   runPeakLevel = level;
   const afterTier = core.spawnRateTier(runPeakLevel);
   if (afterTier > beforeTier) announceSpawnRate();
+  // Levelling runs through condensation now rather than zombies eating each
+  // other, so the evolution beats (new body plan, the "evolved" trophies)
+  // hang off the horde's peak level instead of an eater's level-up.
+  if (core.evolutionTier(level) > beforeForm) announceForm(core.evolutionTier(level), level);
+  if (level >= 5) unlockAchievement("evolved-5");
+  if (level >= 10) unlockAchievement("evolved-10");
   updateScoreHud();
 }
 
@@ -943,10 +961,12 @@ function announceSpawnRate() {
   playBossSpawn();
 }
 
-// The live rate for player kills: the Tweaks slider value plus the run's
-// level-earned bonus.
+// The live rate for player kills: the Tweaks slider value, the run's
+// level-earned bonus, and Corpse Bloom (which used to feed on zombies eating
+// each other — with the horde no longer infighting, every corpse you make is
+// what blooms).
 function spawnsPerKillNow() {
-  return core.effectiveSpawnsPerKill(spawnsPerKill, runPeakLevel);
+  return core.effectiveSpawnsPerKill(spawnsPerKill, runPeakLevel) + mut.lure;
 }
 
 function checkCondensation() {
@@ -1277,7 +1297,7 @@ function resetRun() {
   upgradesEarned = 0;
   upgradesChosen = 0;
   // Fresh genome: mutations cleared, first strike scheduled (difficulty-scaled).
-  mut = { hpMul: 1, dmgMul: 1, speedMul: 1, regen: 0, reachMul: 1, volatile: 0, eatLure: 0 };
+  mut = { hpMul: 1, dmgMul: 1, speedMul: 1, regen: 0, reachMul: 1, volatile: 0, lure: 0 };
   mutationsApplied = [];
   mutationCount = 0;
   mutationTimer = core.mutationDelay(0, DIFFICULTIES[difficulty].wave);
@@ -1877,11 +1897,13 @@ function killZombieByPlayer(m, source = "turret") {
 // Canonical (ranked) values live in core.CANONICAL_TWEAKS — tested — and
 // every slider snaps back to them on scored runs via resetTweaksToDefaults.
 let spawnsPerKill = core.CANONICAL_TWEAKS.spawnsPerKill; // fresh zombies per player blast kill (1.1 = replace + 10% bonus roll)
-let spawnsPerEat = core.CANONICAL_TWEAKS.spawnsPerEat; // fresh zombies spawned per zombie eaten by another zombie (0 = the strong thin the herd)
+// Dormant with ZOMBIE_INFIGHTING off — nothing gets eaten, so this sits at its
+// canonical default and its slider is gone from the Tweaks panel.
+let spawnsPerEat = core.CANONICAL_TWEAKS.spawnsPerEat;
 let speedPerLevel = core.CANONICAL_TWEAKS.speedPerLevel; // extra speed a zombie gains per level past 1
 let simSpeed = core.CANONICAL_TWEAKS.simSpeed; // time multiplier for the zombie sim (movement + combat), not the player's missiles
 let hpPerLevel = core.CANONICAL_TWEAKS.hpPerLevel; // extra max HP per level past 1 — crank it to make elites tanky against blasts too
-let dmgPerLevel = core.CANONICAL_TWEAKS.dmgPerLevel; // extra DPS per level past 1 dealt in zombie-vs-zombie fights
+let dmgPerLevel = core.CANONICAL_TWEAKS.dmgPerLevel; // extra DPS per level past 1 on every zombie shot
 let atkPerLevel = core.CANONICAL_TWEAKS.atkPerLevel; // attack-rate growth per level past 1 (0 = every level shoots at the same cadence)
 
 // The ⚙️ Tweaks sliders, described once so the input handlers (init) and
@@ -1891,7 +1913,6 @@ const TWEAK_SLIDERS = [
   // The BASE rate; the horde's level bonus is added on top at use time, so
   // the HUD readout has to be refreshed when this moves.
   { id: "vx-spawn-per-kill", def: core.CANONICAL_TWEAKS.spawnsPerKill, fmt: (v) => String(Math.round(v * 10) / 10), apply: (v) => { spawnsPerKill = v; updateScoreHud(); } },
-  { id: "vx-spawn-per-eat", def: core.CANONICAL_TWEAKS.spawnsPerEat, fmt: (v) => String(v), apply: (v) => { spawnsPerEat = v; } },
   { id: "vx-spawn-delay", def: core.CANONICAL_TWEAKS.spawnDelay, fmt: (v) => String(v), apply: (v) => { spawnDelay = v; } },
   { id: "vx-speed-per-level", def: core.CANONICAL_TWEAKS.speedPerLevel, fmt: (v) => v.toFixed(2), apply: (v) => {
       speedPerLevel = v;
@@ -2040,14 +2061,21 @@ function attackInterval(level) { return core.attackInterval(level, atkPerLevel);
 // starts shooting from further out.
 function updateZombieCombat(dt) {
   for (const m of monsters) m.fightTarget = null;
-  for (let i = 0; i < monsters.length; i++) {
-    const a = monsters[i];
-    for (let j = i + 1; j < monsters.length; j++) {
-      const b = monsters[j];
-      const reach = EAT_DIST * 1.6 * (bodyScale(a) + bodyScale(b)) / 2;
-      if (Math.hypot(a.x - b.x, a.z - b.z) >= reach) continue;
-      if (!a.fightTarget) a.fightTarget = b;
-      if (!b.fightTarget) b.fightTarget = a;
+  // USER-DIRECTED: the horde is one army. Zombies never turn on each other —
+  // every body in the field is pointed at the Heart. The eat/devour machinery
+  // (resolveZombieKill, eatXp levels, the Spawns-per-eaten tweak) is kept
+  // intact but dormant behind this switch; levelling now comes entirely from
+  // condensation and the spawn-level floor it ratchets.
+  if (ZOMBIE_INFIGHTING) {
+    for (let i = 0; i < monsters.length; i++) {
+      const a = monsters[i];
+      for (let j = i + 1; j < monsters.length; j++) {
+        const b = monsters[j];
+        const reach = EAT_DIST * 1.6 * (bodyScale(a) + bodyScale(b)) / 2;
+        if (Math.hypot(a.x - b.x, a.z - b.z) >= reach) continue;
+        if (!a.fightTarget) a.fightTarget = b;
+        if (!b.fightTarget) b.fightTarget = a;
+      }
     }
   }
   // Anyone not busy brawling turns its guns on the Heart when close enough —
@@ -2167,9 +2195,9 @@ function resolveZombieKill(killer, loser) {
 
   // Replacement spawns — default 1-for-1 keeps eats population-neutral, but
   // it's a tweakable: 0 lets the strong actually thin the herd, higher
-  // values make eating feed the swarm (the Corpse Bloom mutation piles its
-  // lure on top of the slider). Fractional values roll stochastically.
-  let eatSpawns = core.spawnsForKills(1, spawnsPerEat + mut.eatLure);
+  // values make eating feed the swarm. Fractional values roll stochastically.
+  // (Corpse Bloom's lure rides on player kills now — see spawnsPerKillNow.)
+  let eatSpawns = core.spawnsForKills(1, spawnsPerEat);
   while (eatSpawns-- > 0) queueZombieSpawn();
 
   // The killer may itself have died from a crossing projectile in the same
@@ -2446,7 +2474,7 @@ function applyMutation(def) {
     case "regen": mut.regen += 0.5; break;
     case "arms": mut.reachMul *= 1.35; break;
     case "volatile": mut.volatile += 1; break;
-    case "bloom": mut.eatLure += 0.5; break;
+    case "bloom": mut.lure += 0.5; break;
   }
 }
 
