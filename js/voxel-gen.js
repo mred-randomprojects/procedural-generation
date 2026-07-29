@@ -86,8 +86,9 @@ const DEPTH_SPARE = 5;
 // (default 1 = eats are population-neutral; 0 = the strong thin the herd).
 // User-chosen slider values are settings, not artificial limits.
 // USER-DIRECTED exception (not a cap): CONDENSATION. When any single stack
-// level accumulates core.CONDENSE_THRESHOLD living zombies, that cohort
-// fuses into half as many zombies of the NEXT level (see checkCondensation)
+// level accumulates core.CONDENSE_THRESHOLD living zombies, half that cohort
+// is promoted where it stands to the NEXT level and the rest is absorbed
+// into them (see checkCondensation)
 // — total strength keeps escalating forever, only the entity count is tamed
 // so the renderer survives. Population totals remain uncapped.
 const MONSTER_COUNT = 9;
@@ -679,7 +680,8 @@ function maybeMetamorphose(m) {
 
 // The horde showing a new body plan is news however it got there — a zombie
 // re-forming in place (above) or, now that nothing eats its neighbours, a
-// condensation cohort born straight into the form (see notePeakLevel).
+// whole condensation cohort re-forming at once (announced once, via
+// notePeakLevel, rather than once per body).
 function announceForm(tier, level) {
   if (tier <= 0) return; // tier 0 is the plain walker — not an event
   const form = core.evolutionForm(tier);
@@ -759,14 +761,13 @@ function spawnMonsters(biome, heights, seed) {
   updateZombieBoard();
 }
 
-// Creates one zombie at an exact spot. Shared by random/invasion spawns and
-// by condensation (which re-spawns fused survivors where their cohort stood).
-// `arch` defaults to a wave-scaled roll (core.rollArchetype) — pass one
-// explicitly for spawns that shouldn't be breed-diverse (bosses, and the
-// cohorts that come out of a condensation, which are pure mass).
-function spawnZombieAt(x, z, level = 1, isBoss = false, arch = null) {
+// Creates one zombie at an exact spot. Used by random/invasion spawns; the
+// breed is a wave-scaled roll (core.rollArchetype), except for bosses, which
+// are always plain walkers. (Condensation no longer comes through here — it
+// promotes existing bodies in place, see checkCondensation.)
+function spawnZombieAt(x, z, level = 1, isBoss = false) {
   const mats = buildZombieMaterials(currentSeed, monsterIdCounter++);
-  const breed = arch || (isBoss ? core.ARCHETYPES.walker : core.rollArchetype(waveNumber));
+  const breed = isBoss ? core.ARCHETYPES.walker : core.rollArchetype(waveNumber);
   tintZombie(mats, breed);
   // A high-level spawn (condensation, a boss) is BORN in its evolved form.
   const tier = core.evolutionTier(level);
@@ -925,11 +926,17 @@ function clearSanctuaryRing() {
 /* ---------- condensation: 100 of a level fuse into 50 of the next ---------- */
 // The user-directed pressure valve on entity count (see the note by
 // MONSTER_COUNT): the moment any stack level holds CONDENSE_THRESHOLD living
-// non-boss zombies, the whole cohort fuses — all are removed, and half as
-// many spawn at level+1 in the places where they stood. No payouts, no
-// combo, no respawn rolls: it's a merge, not a kill, so it never feeds the
-// player economy or the spawn loops. Bosses never fuse (they're story
-// beats with bounties, not biomass).
+// non-boss zombies, the whole cohort fuses — half of them are PROMOTED IN
+// PLACE to level+1 and the bodies between them are absorbed into them. No
+// payouts, no combo, no respawn rolls: it's a merge, not a kill, so it never
+// feeds the player economy or the spawn loops. Bosses never fuse (they're
+// story beats with bounties, not biomass).
+// In-place is the point: an earlier build deleted the whole cohort and
+// re-spawned the survivors at the same coordinates, which silently handed
+// them fresh angles, fresh attack timers and a fresh fall onto the terrain —
+// a free breather for the defense every time the horde got STRONGER. A
+// promoted zombie keeps its spot, its facing, its breed and the swing it was
+// mid-way through; only its level, body and health change.
 // A fusion also RATCHETS the run: once level X condenses, fresh spawns
 // enter at level X+1 minimum — the world as a whole outgrows its larva
 // stage. Resets to 1 with each new run.
@@ -990,25 +997,41 @@ function checkCondensation() {
     if (group.length < core.CONDENSE_THRESHOLD) continue;
     fused = true;
     const survivors = core.condenseSurvivors(group.length);
+    // Every other body of the cohort is the one that lives on; the odd ones
+    // out (plus the odd straggler when the count is odd) are absorbed.
+    const promoted = [];
     const doomed = new Set(group);
-    for (const m of group) {
+    for (let i = 0; i < survivors; i++) {
+      const m = group[i * 2]; // survivors = floor(len/2), so this never overruns
+      doomed.delete(m);
+      promoted.push(m);
+    }
+    for (const m of doomed) {
       monsterGroup.remove(m.rig.root);
       disposeRig(m.rig);
       disposeZombieMaterials(m.mats);
       disposeMonsterUi(m);
     }
     monsters = monsters.filter((m) => !doomed.has(m));
-    // Fused survivors rise where every other cohort member stood; the fx
-    // burst covers only a sample — hundreds of shockwaves would melt the
-    // frame budget (cosmetic thinning only, the spawns themselves are exact).
-    for (let i = 0; i < survivors; i++) {
-      const src = group[Math.min(group.length - 1, i * 2)];
-      // A fusion melts breeds together — what rises is undifferentiated mass.
-      spawnZombieAt(src.x, src.z, level + 1, false, core.ARCHETYPES.walker);
-      if (i < 20) spawnEatFx(src.x, heightAt(src.x, src.z) + 1, src.z);
+    for (const m of promoted) {
+      m.stackLevel = level + 1;
+      m.hp = maxHpFor(m); // absorbing the cohort heals it to the new full
+      // A breed is for life: a Runner that condenses is a faster level N+1.
+      m.speed = (stackSpeed(m.stackLevel) + Math.random() * 0.2) * (m.arch?.speed ?? 1);
+      m.eatPulse = 0.3; // pulse, so the fusion reads as an event not a glitch
+      // Re-form in place if the new level crosses a body-plan boundary. The
+      // per-monster maybeMetamorphose fanfare would fire fifty times over —
+      // notePeakLevel announces the form once for the whole cohort instead.
+      const tier = core.evolutionTier(m.stackLevel);
+      if (tier !== m.tier) { m.tier = tier; remeshZombie(m, tier); }
+      notePeakLevel(m.stackLevel); // no-ops for all but the first (peak only climbs)
     }
-    // Newborns pulse so the fusion reads as an event, not a glitch.
-    for (let i = monsters.length - survivors; i < monsters.length; i++) monsters[i].eatPulse = 0.3;
+    // The fx burst covers only a sample — hundreds of shockwaves would melt
+    // the frame budget (cosmetic thinning only; the merge itself is exact).
+    for (let i = 0; i < Math.min(20, promoted.length); i++) {
+      const m = promoted[i];
+      spawnEatFx(m.x, heightAt(m.x, m.z) + 1, m.z);
+    }
     minSpawnLevel = core.condenseFloor(minSpawnLevel, level);
     showBanner("fuse", "⚗️ CRITICAL MASS", `${group.length} × Lv ${level} CONDENSE`,
       `${survivors} level-${level + 1} zombies rise — fresh spawns now start at Lv ${minSpawnLevel}`);

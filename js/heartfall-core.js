@@ -330,9 +330,11 @@ export function mutationAtIndex(seedStr, index) {
 // USER-DIRECTED design (an explicit revision of the "no limits" principle,
 // for performance): the total population is still never capped, but when any
 // single stack level accumulates CONDENSE_THRESHOLD (100) living zombies,
-// that whole cohort fuses — every one of them is removed and half as many spawn
-// at the NEXT level up, in their places. Quantity becomes quality: entity
-// counts stay renderable while the horde's strength keeps climbing.
+// that whole cohort fuses — half of the bodies are promoted to the NEXT level
+// where they already stand, and the other half is absorbed into them (nothing
+// is re-spawned; a merge must not reset the horde's position or its attacks,
+// which would make growing stronger a favour to the defender). Quantity
+// becomes quality: entity counts stay renderable while strength climbs.
 
 // Lowered 500 → 200 → 100 at the user's direction: fusing sooner means the
 // horde converts into strength faster and the frame budget never sees a
