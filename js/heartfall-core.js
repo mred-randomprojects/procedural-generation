@@ -381,6 +381,23 @@ export function runScore(survivalSeconds, killCount) {
 
 export function legacyCost(rank) { return 3 + rank * 2; } // shards; grows per rank
 
+// Shift-clicking a Legacy perk buys in bulk: up to LEGACY_BULK_RANKS ranks in
+// one press, or as many as the bank can actually afford ("try to augment 50
+// levels" — a partial buy is a buy, not a refusal). Costs are summed rank by
+// rank so the escalating price is charged exactly, never approximated.
+export const LEGACY_BULK_RANKS = 50;
+
+export function legacyBulkBuy(rank, shards, maxRanks = LEGACY_BULK_RANKS) {
+  let ranks = 0, cost = 0;
+  while (ranks < maxRanks) {
+    const next = cost + legacyCost(rank + ranks);
+    if (next > shards) break;
+    cost = next;
+    ranks++;
+  }
+  return { ranks, cost };
+}
+
 // Shards banked at the end of a scored run; Shard Magnet ranks multiply.
 export function shardsForScore(score, shardRank = 0) {
   return Math.max(1, Math.floor((score / 50) * (1 + 0.15 * shardRank)));

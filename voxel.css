@@ -319,6 +319,14 @@ html, body {
   text-align: center;
   margin-bottom: 8px;
 }
+/* Bulk-buy affordance + the receipt line for the last shift-click/hold. */
+.legacy-hint {
+  font-size: 11px;
+  color: #93a3b3;
+  text-align: center;
+  margin-bottom: 8px;
+  line-height: 1.35;
+}
 .legacy-row {
   display: flex;
   justify-content: space-between;
@@ -341,6 +349,12 @@ html, body {
   font-size: 12.5px;
   cursor: pointer;
   white-space: nowrap;
+  /* A half-second hold is the phone's shift-click — don't let it turn into a
+     text selection or a callout menu instead. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
 }
 .legacy-buy:hover:not(:disabled) { filter: brightness(1.3); }
 .legacy-buy:disabled { opacity: 0.4; cursor: not-allowed; }

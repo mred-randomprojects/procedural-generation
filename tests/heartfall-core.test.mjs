@@ -347,6 +347,23 @@ test("legacyCost grows with rank", () => {
   assert.ok(core.legacyCost(5) > core.legacyCost(4));
 });
 
+test("bulk buy takes as many ranks as the bank covers, up to the cap", () => {
+  // Exact sum of the escalating price, never an estimate: 3 + 5 + 7 = 15.
+  assert.deepEqual(core.legacyBulkBuy(0, 15, 3), { ranks: 3, cost: 15 });
+  assert.deepEqual(core.legacyBulkBuy(0, 14, 3), { ranks: 2, cost: 8 }); // 3+5, can't reach 7
+  assert.deepEqual(core.legacyBulkBuy(0, 2, 50), { ranks: 0, cost: 0 }); // broke → no buy
+  // Starting rank matters: rank 10 costs 23, so 15 shards buys nothing there.
+  assert.deepEqual(core.legacyBulkBuy(10, 15, 50), { ranks: 0, cost: 0 });
+  // A rich bank stops at the cap, not at its shards.
+  const rich = core.legacyBulkBuy(0, 1e9);
+  assert.equal(rich.ranks, core.LEGACY_BULK_RANKS);
+  let sum = 0;
+  for (let r = 0; r < core.LEGACY_BULK_RANKS; r++) sum += core.legacyCost(r);
+  assert.equal(rich.cost, sum);
+  // Single-rank buys go through the same door (maxRanks = 1).
+  assert.deepEqual(core.legacyBulkBuy(0, 100, 1), { ranks: 1, cost: 3 });
+});
+
 test("shardsForScore pays at least 1 and Shard Magnet multiplies", () => {
   assert.equal(core.shardsForScore(0), 1);
   assert.equal(core.shardsForScore(100), 2);

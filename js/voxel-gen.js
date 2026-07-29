@@ -1179,6 +1179,7 @@ function endRun() {
       `${line1}<br>` +
       `${scoreLine}<br>` +
       `🔮 Shards earned: <b>+${core.fmtNum(shardsEarned)}</b>`;
+    legacyBuyNote = ""; // last run's receipt isn't this run's news
     renderLegacyShop();
   }
 
@@ -1189,6 +1190,7 @@ function endRun() {
 // The permanent-upgrade storefront on the defeat screen. Perks apply from
 // the NEXT run on; buying re-renders in place so shards can be chain-spent.
 const LEGACY_PERKS = core.LEGACY_PERKS;
+let legacyBuyNote = ""; // receipt line for the last bulk buy, shown in the shop
 
 function renderLegacyShop() {
   const el = document.getElementById("vx-legacy-shop");
@@ -1197,25 +1199,72 @@ function renderLegacyShop() {
     const rank = legacy[p.key];
     const cost = legacyCost(rank);
     const afford = legacy.shards >= cost;
+    const bulk = core.legacyBulkBuy(rank, legacy.shards);
+    // The button's hover text spells the bulk deal out — after a long run a
+    // single rank at a time is dozens of clicks.
+    const hint = afford
+      ? ` title="Shift-click (or hold) for up to ${core.LEGACY_BULK_RANKS}: +${bulk.ranks} for ${bulk.cost} 🔮"`
+      : "";
     return `<div class="legacy-row">
       <span class="legacy-name">${p.icon} ${p.name} <em>Lv ${rank}</em><br><small>${p.desc}</small></span>
-      <button class="legacy-buy" data-perk="${i}" ${afford ? "" : "disabled"}>${cost} 🔮</button>
+      <button class="legacy-buy" data-perk="${i}"${hint} ${afford ? "" : "disabled"}>${cost} 🔮</button>
     </div>`;
   }).join("");
-  el.innerHTML = `<div class="legacy-title">🔮 Legacy — ${core.fmtNum(legacy.shards)} shards</div>${rows}`;
+  // The line under the title doubles as the receipt for the last bulk buy —
+  // a toast would be lost behind the defeat overlay, and a partial batch
+  // ("you could only afford 7 of 50") is exactly what needs saying.
+  const hintLine = legacyBuyNote
+    || `Shift-click (or hold) a price to buy up to ${core.LEGACY_BULK_RANKS} ranks at once`;
+  el.innerHTML = `<div class="legacy-title">🔮 Legacy — ${core.fmtNum(legacy.shards)} shards</div>`
+    + `<div class="legacy-hint">${hintLine}</div>`
+    + rows;
   for (const btn of el.querySelectorAll(".legacy-buy")) {
-    btn.addEventListener("click", () => {
-      const perk = LEGACY_PERKS[Number(btn.dataset.perk)];
-      const cost = legacyCost(legacy[perk.key]);
-      if (legacy.shards < cost) return;
-      legacy.shards -= cost;
-      legacy[perk.key]++;
-      saveLegacy();
-      if (core.legacyTotalRanks(legacy) >= 5) unlockAchievement("legacy-5");
-      playPurchase();
-      renderLegacyShop();
+    // Bulk on shift-click for the desktop hand, and on a half-second hold for
+    // the phone one (no shift key there). The hold consumes the click that
+    // follows it, so a long press buys 50 and not 50-then-1.
+    let holdTimer = null, boughtByHold = false;
+    const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+    btn.addEventListener("pointerdown", (e) => {
+      boughtByHold = false;
+      cancelHold();
+      // Touch/pen only: a mouse that lingers half a second on a button is a
+      // slow click, not a request to spend the whole shard bank.
+      if (e.pointerType === "mouse") return;
+      holdTimer = setTimeout(() => { holdTimer = null; boughtByHold = true; buyLegacy(btn, true); }, 500);
+    });
+    for (const ev of ["pointerup", "pointerleave", "pointercancel"]) {
+      btn.addEventListener(ev, cancelHold);
+    }
+    btn.addEventListener("click", (e) => {
+      cancelHold();
+      if (boughtByHold) { boughtByHold = false; return; } // the hold already paid
+      buyLegacy(btn, e.shiftKey);
     });
   }
+}
+
+// One purchase, of one rank or of a whole batch. A bulk buy takes as many
+// ranks as the bank covers (up to LEGACY_BULK_RANKS) — a partial batch is
+// still a buy; only an empty one is a no-op.
+function buyLegacy(btn, bulk) {
+  const perk = LEGACY_PERKS[Number(btn.dataset.perk)];
+  if (!perk) return;
+  const rank = legacy[perk.key];
+  const buy = bulk
+    ? core.legacyBulkBuy(rank, legacy.shards)
+    : core.legacyBulkBuy(rank, legacy.shards, 1);
+  if (buy.ranks < 1) return;
+  legacy.shards -= buy.cost;
+  legacy[perk.key] += buy.ranks;
+  saveLegacy();
+  if (core.legacyTotalRanks(legacy) >= 5) unlockAchievement("legacy-5");
+  playPurchase();
+  if (bulk) {
+    const short = buy.ranks < core.LEGACY_BULK_RANKS ? " (all you could afford)" : "";
+    legacyBuyNote = `${perk.icon} ${perk.name} +${buy.ranks} rank${buy.ranks === 1 ? "" : "s"}`
+      + ` for ${core.fmtNum(buy.cost)} 🔮${short}`;
+  }
+  renderLegacyShop();
 }
 
 /* ---------- contracts: three optional objectives per run ---------- */
