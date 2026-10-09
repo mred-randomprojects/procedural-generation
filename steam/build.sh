@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Stages the web game into steam/app/ as a fully offline-capable desktop
 # build: copies the game files, vendors three.js locally, rewrites the
-# import map to the vendored copy, and stamps version.json. Idempotent —
-# rerun after any game change, then `npm start` / `npm run package:*`.
+# import map to the vendored copy, drops the ⌘S helper the page imports
+# from jsDelivr, and stamps version.json. Idempotent — rerun after any game
+# change, then `npm start` / `npm run package:*`.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -27,8 +28,27 @@ sed "s#https://unpkg.com/three@${THREE_VERSION}/build/three.module.js#./js/three
   app/voxel.html > app/voxel.html.tmp
 mv app/voxel.html.tmp app/voxel.html
 
-if grep -q "unpkg.com" app/voxel.html; then
-  echo "ERROR: import map still points at unpkg — check THREE_VERSION vs index.html" >&2
+# The page's ⌘S / Ctrl+S interception (cmd-s) is an inline module importing
+# from jsDelivr: a network request the offline build must not make, and the
+# Electron window has no save-page dialog for it to suppress. Drop that one
+# <script type="module"> block, recognised by its URL; keep every other line.
+awk '
+  !inblock && /<script type="module">/ && !/<\/script>/ { inblock = 1; block = "" }
+  inblock {
+    block = block $0 "\n"
+    if (/<\/script>/) {
+      if (!index(block, "cdn.jsdelivr.net/gh/mred-randomprojects/cmd-s@")) printf "%s", block
+      inblock = 0
+    }
+    next
+  }
+  { print }
+  END { if (inblock) printf "%s", block }
+' app/voxel.html > app/voxel.html.tmp
+mv app/voxel.html.tmp app/voxel.html
+
+if grep -qE 'https://(unpkg|cdn\.jsdelivr)' app/voxel.html; then
+  echo "ERROR: app/voxel.html still loads from a CDN — check THREE_VERSION vs index.html, and the cmd-s block" >&2
   exit 1
 fi
 

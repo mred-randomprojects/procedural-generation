@@ -1,9 +1,9 @@
 // Electron shell for Heartfall — wraps the web build for Steam distribution.
 //
-// The game itself lives in ../index.html + ../js/*; `npm run stage` (see
-// README) copies those into ./app before packaging so the shipped app is
-// fully self-contained and offline-capable (the three.js import map must be
-// vendored — see README step 2).
+// The game itself lives in ../index.html + ../js/*; `./build.sh` (README
+// step 1) copies those into ./app before packaging so the shipped app is
+// fully self-contained and offline-capable (it vendors three.js, points the
+// import map at the copy and drops the CDN-loaded ⌘S helper).
 const { app, BrowserWindow } = require("electron");
 const path = require("path");
 
