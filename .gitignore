@@ -2,3 +2,9 @@
 node_modules/
 steam/app/
 steam/dist/
+.env
+.env.*
+!.env.example
+*.local
+*service-account*.json
+.claude/settings.local.json
