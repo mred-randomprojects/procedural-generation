@@ -759,6 +759,17 @@ export const ACHIEVEMENTS = {
 /* ---------- persisted-state sanitizers ---------- */
 // localStorage payloads are user-editable and versions drift; every load
 // goes through one of these so the game only ever sees a well-formed shape.
+//
+// For vx-legacy, vx-stats and vx-daily they are also the only migration
+// point. The saves carry no schema version: so far every change has added a
+// key, which needs nothing (an old save just gets the default). Renaming a
+// field, or changing what an existing one means, must be migrated in here
+// from the raw payload, e.g. `raw.newKey ?? raw.oldKey`. Otherwise the old
+// value is silently dropped on load and, since every save writes the
+// sanitized object back, gone for good on the next save. That first breaking
+// change is the moment to add a `v` field (a save without one is today's
+// shape). tests/heartfall-core.test.mjs pins today's payload of all three
+// loading back unchanged.
 
 function nonNegNumber(v, fallback = 0) {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : fallback;

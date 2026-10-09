@@ -791,3 +791,34 @@ test("sanitizeStats and sanitizeDaily reject malformed payloads", () => {
   assert.equal(daily.streak, 4);
   assert.equal(daily.bestDay, "2026-07-01");
 });
+
+/* ---------- save compatibility ---------- */
+// Today's exact shape of each sanitized save, every field set to a
+// non-default value. A player's existing save must load back unchanged. If
+// one of these fails because a field was renamed or changed meaning, migrate
+// the old field inside the sanitizer (see the comment above the sanitizers
+// in heartfall-core.js); never edit the payload to make it pass. A newly
+// added field fails here too: add it to its payload.
+const SAVED_PAYLOADS = [
+  ["vx-legacy", core.sanitizeLegacy, {
+    heartRank: 3, energyRank: 2, blastRank: 4, damageRank: 1, turretRank: 2,
+    rateRank: 5, boltRank: 1, groundRank: 2, comboRank: 3, mineRank: 1,
+    shardRank: 2, shards: 1234,
+  }],
+  ["vx-stats", core.sanitizeStats, {
+    runs: 42, kills: 9001, bosses: 7, totalWaves: 310, bestWave: 23,
+    timePlayed: 18234.75, dailies: 5, contractsDone: 11, bestCombo: 17,
+  }],
+  ["vx-daily", core.sanitizeDaily, {
+    lastDay: "2026-10-08", streak: 4, todayBest: 5120, bestScore: 8800, bestDay: "2026-10-02",
+  }],
+];
+
+for (const [key, sanitize, payload] of SAVED_PAYLOADS) {
+  test(`${key}: today's saved payload loads back unchanged`, () => {
+    const loaded = sanitize(JSON.parse(JSON.stringify(payload)));
+    assert.deepEqual(loaded, payload);
+    // ...and saving it again writes the same payload back.
+    assert.deepEqual(sanitize(JSON.parse(JSON.stringify(loaded))), payload);
+  });
+}
