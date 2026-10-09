@@ -12,7 +12,14 @@
 // into half as many next-level zombies once it reaches the threshold —
 // strength is conserved and keeps escalating, only the entity count is tamed.
 
-/* ---------- seeded PRNG (self-contained copy for contracts/daily) ---------- */
+/* ---------- seeded PRNG (self-contained, for mutations/contracts/daily) ---------- */
+// There are two different hashSeeds, and they must stay that way. This one
+// is FNV-1a; the global hashSeed from js/noise.js is xmur3, so the same
+// string seeds differently in each. Terrain, monsters, trees and textures hash through
+// noise.js's; horde mutations, contracts and the Daily biome hash through
+// this one. Do not "dedupe" them or change either: that reshuffles every
+// seeded world (Dailies included) or every mutation, contract roll and Daily
+// biome players have already seen. mulberry32 is the same in both files.
 
 export function hashSeed(str) {
   let h = 2166136261 >>> 0;
