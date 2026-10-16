@@ -10,15 +10,18 @@
   <title>Heartfall — Voxel Heart Defense</title>
   <link rel="stylesheet" href="voxel.css" />
   <script src="js/noise.js" defer></script>
+  <!-- three.js and cmd-s are copies of their releases in vendor/, pinned by
+       hash in scripts/check-vendor.mjs. Never point them at a CDN: this page
+       shares its origin, and so its storage, with every other app. -->
   <script type="importmap">
-    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    { "imports": { "three": "./vendor/three-0.160.0.module.js" } }
   </script>
   <script src="js/voxel-gen.js" type="module" defer></script>
   <script type="module">
     // ⌘S / Ctrl+S: a run is not something you can save mid-wave, and the rest
     // (legacy, stats, achievements) writes itself, so only keep the browser
     // from offering to save the page.
-    import { interceptSave } from "https://cdn.jsdelivr.net/gh/mred-randomprojects/cmd-s@1.0.0/dist/cmd-s.js";
+    import { interceptSave } from "./vendor/cmd-s-1.0.0.js";
     interceptSave();
   </script>
 </head>

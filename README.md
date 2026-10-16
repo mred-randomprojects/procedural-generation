@@ -2,12 +2,15 @@
 
 **💎 Heartfall** — a full voxel tower-defense game — plus the procedural
 generation experiments it grew out of (noise terrain, wave function collapse,
-isometric 3D). No build step beyond loading Three.js from a CDN.
+isometric 3D). No build step. Its two third-party files, Three.js r160 and
+cmd-s (⌘S), are copies in `vendor/` served by the site itself, never a CDN:
+`scripts/check-vendor.mjs` pins them by hash.
 
 **Run it:** open `index.html` directly, or serve the folder
 (`python3 -m http.server 8123` → http://localhost:8123).
 
-**Test it:** `npm test` (Node ≥ 18; runs the game-logic suite in `tests/`).
+**Test it:** `npm test` (Node ≥ 18; runs the game-logic suite in `tests/`
+and checks the vendored files against their pins; the deploy runs it too).
 
 - `index.html` — **💎 Heartfall**: defend the Heart against an evolving
   voxel zombie horde (see below)
@@ -104,4 +107,8 @@ into superposition and re-collapses ("heals") around your choice.
   input, HUD)
 - `js/voxel-textures.js`, `js/voxel-audio.js` — procedural block/zombie
   textures and the synthesized SFX kit
+- `vendor/` — Three.js r160 (`build/three.module.js` from npm `three@0.160.0`)
+  and cmd-s v1.0.0, byte for byte; `scripts/check-vendor.mjs` pins their
+  hashes, fails on any page that loads a script from another host, and with
+  `--upstream` re-downloads the releases to compare
 - `steam/` — Electron shell + `build.sh` staging script for Steam depots

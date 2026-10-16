@@ -5,9 +5,9 @@ suitable for Steam depots.
 
 ## Build steps
 
-1. **Stage the web build** (copies the game into `app/`, vendors three.js
-   for offline play, rewrites the import map, drops the ⌘S helper the page
-   imports from jsDelivr, stamps the version badge):
+1. **Stage the web build** (checks the vendored files against their pins,
+   copies the game and its vendored three.js into `app/`, drops the ⌘S
+   helper, stamps the version badge):
 
    ```bash
    ./build.sh
@@ -51,11 +51,12 @@ suitable for Steam depots.
 `build.sh` stages: `index.html` (the game, staged as `app/voxel.html`),
 `voxel.css`, `js/noise.js`,
 `js/heartfall-core.js`, `js/voxel-gen.js`, `js/voxel-textures.js`,
-`js/voxel-audio.js`, a vendored `js/three.module.js`, and a stamped
-`version.json`. It leaves out the page's ⌘S helper (cmd-s, imported from
-jsDelivr; the desktop window has no save-page dialog for it to block), and
-it fails if the staged page still references unpkg or jsDelivr, so no
-network access is needed at runtime.
+`js/voxel-audio.js`, `vendor/three-0.160.0.module.js` (the same copy the
+site serves, which `scripts/check-vendor.mjs` must match to its pinned hash
+first), and a stamped `version.json`. It leaves out the page's ⌘S helper
+(cmd-s; the desktop window has no save-page dialog for it to block), and it
+fails if the staged page still references unpkg or jsDelivr or loads a
+vendored file it did not stage, so no network access is needed at runtime.
 
 Game-logic changes are covered by the repo test suite — run `npm test`
 from the repo root before packaging.
